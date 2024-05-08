@@ -1,0 +1,6 @@
+grobid-*
+temp
+.devcontainer
+__pycache__
+.env
+service_account_key.json

@@ -1,0 +1,12 @@
+sentence_transformers 
+nltk
+pydash
+icecream
+beautifulsoup4
+StrEnum
+duckduckgo_search
+google.ai.generativelanguage
+google-auth-oauthlib
+pandas
+numpy
+lxml
