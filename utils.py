@@ -26,6 +26,7 @@ def load_pdfs(paper_urls):
         x.name.replace(".tei.xml", ""): x
         for x in Path("./temp/xmls").glob("**/*.tei.xml")
     }
+    
     IDS = {
         parse.urlparse(url).path.split("/")[-1].replace(".pdf", ""): url
         for url in paper_urls
@@ -303,7 +304,7 @@ def verify_entity(entity, entity_type):
                     DDGS().text(
                         query,
                         max_results=5,
-                        backend="api",
+                        backend="html",
                     )
                 )
                 .map_(lambda x: f"{x['title']}: {x['body']}")
@@ -313,6 +314,7 @@ def verify_entity(entity, entity_type):
                 return False
             break
         except exceptions.RatelimitException:
+            ic('Error: DDGS rate limit exception!')
             time.sleep(sleep_interval)
             sleep_interval *= 1.2
             continue
@@ -333,6 +335,8 @@ def verify_entity(entity, entity_type):
     except:
         ic(attempted_answer)
         return False
+
+
 
 def extract_entities(
     chunks, q_embeds, entity_type, keywords=None, entities=set(), verify=True, temperature=None

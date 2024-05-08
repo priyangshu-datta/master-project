@@ -26,7 +26,7 @@ def main():
     # actual code
 
     text_chain = url_to_text([
-        'https://arxiv.org/pdf/1705.05952'
+        ''
     ])
 
     datasets = text_to_entities(text_chain, verify=True)
