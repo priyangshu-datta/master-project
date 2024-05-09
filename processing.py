@@ -110,5 +110,5 @@ def group_sentences(sentences, max_tokens=100, overlap=1):
 
 pretty_print_with_zeros = lambda number, length: str(number).zfill(length)
 
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
+embedder = SentenceTransformer("all-MiniLM-L6-v2", cache_folder='temp/transformers/model/')
 
