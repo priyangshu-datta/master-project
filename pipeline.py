@@ -22,13 +22,13 @@ clean_entities = (
 )
 
 
-url_to_text = lambda urls: py_.chain(urls).apply(load_pdfs).apply(
+url_to_text = lambda urls: py_.chain(urls).apply(load_pdfs).tap(ic).apply(
     lambda x: pdfs_to_xmls(x[0], x[1])
 ).apply(py_.to_pairs).map_(
     lambda id_path: (id_path[0], xml_to_body_text(id_path[1]))
 )
 
-pdfs_to_xmls = lambda files: 
+# pdfs_to_xmls = lambda files: 
 
 
 dmddID_to_text = lambda ids, dmdd: py_.chain(ids).reduce_(
