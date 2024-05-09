@@ -18,7 +18,14 @@ def main():
     
     # initializing grobid
     grobid_version = os.environ.get('GROBID_VERSION')
+    if grobid_version == None:
+        raise Exception('No grobid version found in environment.')
     inits['grobid'] = grobid_init(grobid_version)
+    
+    if inits['grobid'] == True:
+        ic('GROBID initialized successfully!')
+    else:
+        ic('Something went wrong initializing GROBID.')
     
     # create the temp folders
     Path('temp/pdfs/').mkdir(exist_ok=True, parents=True)
@@ -33,18 +40,17 @@ def main():
 
     def handleClick(files):
         files = files if files else []
-
+        datasets = []
         if len(files) > 0:
             text_chain = pdfs_to_text(files)
             # + ['https://arxiv.org/pdf/1705.04304'])
             datasets = text_to_entities(text_chain, verify=True)
-            ic(datasets)
-        else:
-            text_chain = pdfs_to_text(['https://arxiv.org/pdf/1705.04304'])
-            datasets = text_to_entities(text_chain, verify=True)
-            ic(datasets)
 
+        for paper_id, paper_datasets in datasets.items():
+            st.write(f"{paper_id}: {', '.join(paper_datasets)}")
 
+    
+    
     # remove the temp folders
     shutil.rmtree('temp')
 
