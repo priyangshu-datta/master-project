@@ -15,18 +15,14 @@ from icecream import ic
 from sentence_transformers import util
 import hashlib
 
-create_file_id = lambda file_name: py_.chain(
-    file_name.lower().split(' ')
-).apply_if(
-    lambda tokens: tokens[0],
-    lambda x: len(x) == 1
-).apply_if(
-    lambda tokens: py_.join(tokens, '-'),
-    lambda x: len(x) < 5 
-).apply_if(
-    lambda tokens: hashlib.sha256(py_.join(tokens, ' ').encode('utf-8')).hexdigest(),
-    lambda x: len(x) > 5 
-).value()
+def create_file_id(file_name):
+    tokens = file_name.split(' ')
+    if len(tokens) == 1:
+        return file_name
+    elif len(tokens) < 5:
+        return '-'.join(tokens)
+    else:
+        return hashlib.sha256(file_name.encode('utf-8')).hexdigest()
 
 gen_datetime_name = (
     lambda: f"{time.strftime('%Y%m%d%H%M%S')}{int((time.time() - int(time.time())) * 1000):03d}"
@@ -41,7 +37,7 @@ def create_random_dir(parent='.'):
 def upload_pdfs(files, new_cache_dir=create_random_dir('temp/pdfs/')):
     for file in files:
         file_id = create_file_id(file.name.replace('.pdf',''))
-        with open(new_cache_dir.joinpath(file_id).with_suffix('.pdf'), "wb") as f:
+        with open(str(new_cache_dir.joinpath(file_id)) + '.pdf', "wb") as f:
             f.write(file.getbuffer())
     return new_cache_dir
 
@@ -96,8 +92,6 @@ def load_pdfs(papers):
     to_load = set(PDF_URL_MAP.keys())
     to_process = to_load.difference(CACHED_XMLS.keys())
 
-    ic(to_load)
-
     if len(to_process) < 1:
         return None, {k: CACHED_XMLS[k] for k in to_load}
 
@@ -113,7 +107,7 @@ def load_pdfs(papers):
     to_load = to_process.difference(to_move.keys())
 
     if len(to_load) < 1:
-        return new_cache_dir, CACHED_XMLS
+        return new_cache_dir, py_.pick_by(CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys())
 
     to_download = [ PDF_URL_MAP[id] for id in to_load if uri_validator(PDF_URL_MAP[id]) ]
     to_upload = [ PDF_URL_MAP[id] for id in to_load if not uri_validator(PDF_URL_MAP[id]) ]
@@ -132,7 +126,10 @@ def load_pdfs(papers):
 def pdfs_to_xmls(pdfs_folder_name, CACHED_XMLS={}):
     grobid_version = os.environ.get('GROBID_VERSION')
     if pdfs_folder_name == None:
+        ic(f'Already cached for files: {" ".join(CACHED_XMLS)}')
         return CACHED_XMLS
+
+    ic(Path(pdfs_folder_name).iterdir())
 
     xmls_folder_name = f"./temp/xmls/{gen_datetime_name()}"
     Path(xmls_folder_name).mkdir(exist_ok=True, parents=True)

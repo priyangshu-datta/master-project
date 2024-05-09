@@ -1,18 +1,22 @@
-from dotenv import load_dotenv
-import os
-from bootstraps.grobid import grobid_init
-from pathlib import Path
-import shutil
-import utils
-from icecream import ic
-from pipeline import pdfs_to_text, text_to_entities
-import streamlit as st
-import pydash as py_
-
-
 def main():
-    # load envs
+    from dotenv import load_dotenv
+
     load_dotenv()
+
+    import os
+    from bootstraps.grobid import grobid_init
+    from pathlib import Path
+    import shutil
+    import utils
+    from icecream import ic
+    from pipeline import pdfs_to_text, text_to_entities
+    import streamlit as st
+    import pydash as py_
+    import json
+    import pandas as pd
+    from urllib import parse
+    # load envs
+
 
     inits = {}
     
@@ -34,25 +38,36 @@ def main():
 
 
     # actual code
-    files = st.file_uploader("Upload Research Paper","pdf",True)
-
-    st.button('Process', on_click=lambda: handleClick(files))
+    # https://arxiv.org/pdf/1705.04304
 
     def handleClick(files):
         files = files if files else []
         datasets = []
         if len(files) > 0:
             text_chain = pdfs_to_text(files)
-            # + ['https://arxiv.org/pdf/1705.04304'])
-            datasets = text_to_entities(text_chain, verify=True)
+            datasets = text_to_entities(text_chain, verify=True, temperature=0.06)
 
         for paper_id, paper_datasets in datasets.items():
             st.write(f"{paper_id}: {', '.join(paper_datasets)}")
 
+
+    df = pd.DataFrame([{"URL": None}])
+    edited_df = st.data_editor(df, num_rows="dynamic")
+
+    if py_.chain(set(edited_df['URL'].to_list())).filter_(lambda x: x!=None).apply(len).value() > 0:    
+        st.button('Process', on_click=lambda: handleClick(edited_df['URL'].to_list()), key='url_btn')
+    
+    files = st.file_uploader("Upload Research Paper","pdf",True)
+
+    if files:
+        st.button('Process', on_click=lambda: handleClick(files), key='file_btn')
+
+
+
     
     
     # remove the temp folders
-    shutil.rmtree('temp')
+    # shutil.rmtree('temp')
 
 
 if __name__ == '__main__':
