@@ -13,68 +13,134 @@ from enums import EntityType
 from duckduckgo_search import DDGS, exceptions
 from icecream import ic
 from sentence_transformers import util
+import hashlib
 
+create_file_id = lambda file_name: py_.chain(
+    file_name.lower().split(' ')
+).apply_if(
+    lambda tokens: tokens[0],
+    lambda x: len(x) == 1
+).apply_if(
+    lambda tokens: py_.join(tokens, '-'),
+    lambda x: len(x) < 5 
+).apply_if(
+    lambda tokens: hashlib.sha256(py_.join(tokens, ' ').encode('utf-8')).hexdigest(),
+    lambda x: len(x) > 5 
+).value()
 
 gen_datetime_name = (
     lambda: f"{time.strftime('%Y%m%d%H%M%S')}{int((time.time() - int(time.time())) * 1000):03d}"
 )
 
-def load_pdfs(paper_urls):
-    parent_dir = Path("./temp/pdfs")
+def create_random_dir(parent='.'):
+    new_cache_dir = f"{parent}/{gen_datetime_name()}"
+    Path(new_cache_dir).mkdir(parents=True, exist_ok=True)
 
-    cached_xmls = {
-        x.name.replace(".tei.xml", ""): x
-        for x in Path("./temp/xmls").glob("**/*.tei.xml")
-    }
-    
-    IDS = {
+    return Path(new_cache_dir)
+
+def upload_pdfs(files, new_cache_dir=create_random_dir('temp/pdfs/')):
+    for file in files:
+        file_id = create_file_id(file.name.replace('.pdf',''))
+        with open(new_cache_dir.joinpath(file_id).with_suffix('.pdf'), "wb") as f:
+            f.write(file.getbuffer())
+    return new_cache_dir
+
+def download_pdfs(urls, new_cache_dir=create_random_dir('temp/pdfs/')):
+    new_cache_dir = create_random_dir('temp/pdfs/')
+    to_load = {
         parse.urlparse(url).path.split("/")[-1].replace(".pdf", ""): url
-        for url in paper_urls
+        for url in urls
     }
+    for id, url in to_load.items():
+        request.urlretrieve(url, f"{new_cache_dir}/{id}.pdf")
+    
+    return new_cache_dir
 
-    to_download = py_.objects.omit_by(IDS, lambda _, k: k in cached_xmls.keys())
+def to_new_cache(files):
+    new_cache_dir = create_random_dir('temp/pdfs/')
+    for pdf_path in files:
+        shutil.move(pdf_path, f"{new_cache_dir}/")
 
-    if len(to_download) < 1:
-        return None, {k: cached_xmls[k] for k in IDS.keys()}
-
-    folder_name = f"{parent_dir}/{gen_datetime_name()}"
-    Path(folder_name).mkdir(parents=True, exist_ok=True)
-
-    cached_pdfs = {
-        x.name.replace(".pdf", ""): x for x in Path(parent_dir).glob("**/*.pdf")
-    }
-
-    to_move = py_.objects.omit_by(cached_pdfs, lambda _, k: k in cached_xmls.keys())
-
-    for pdf_path in to_move.values():
-        shutil.move(pdf_path, f"{folder_name}/")
-
-    for folder in parent_dir.glob("**/*"):
-        if folder.samefile(folder_name): continue
+    # remove empty cache dirs
+    for folder in Path('temp/pdfs').glob("**/*"):
+        if folder.samefile(new_cache_dir): continue
         if folder.is_dir() and not any(folder.iterdir()):
             folder.rmdir()
 
-    to_download = py_.objects.omit_by(to_download, lambda _, k: k in to_move.keys())
+    return new_cache_dir
 
-    if len(to_download) < 1:
-        return folder_name, cached_xmls
+def uri_validator(x):
+    try:
+        result = parse.urlparse(x)
+        return all([result.scheme, result.netloc])
+    except AttributeError:
+        return False
 
-    for id, url in to_download.items():
-        request.urlretrieve(url, f"{folder_name}/{id}.pdf")
+def load_pdfs(papers):
+    if len(papers) < 1:
+        return None, None
 
-    return folder_name, cached_xmls
+    pdf_dir = Path("temp/pdfs")
+    PDF_URL_MAP = {}
+    for paper in papers:
+        if uri_validator(paper):
+            PDF_URL_MAP[parse.urlparse(paper).path.split("/")[-1].replace(".pdf", "")] = paper
+        else:
+            PDF_URL_MAP[create_file_id(paper.name.replace('.pdf',''))] = paper
 
-def pdfs_to_xmls(pdfs_folder_name, cached_xmls={}):
+    CACHED_XMLS = {
+        x.name.replace(".tei.xml", ""): x
+        for x in Path("temp/xmls").glob("**/*.tei.xml")
+    }
+    
+    to_load = set(PDF_URL_MAP.keys())
+    to_process = to_load.difference(CACHED_XMLS.keys())
+
+    ic(to_load)
+
+    if len(to_process) < 1:
+        return None, {k: CACHED_XMLS[k] for k in to_load}
+
+
+    CACHED_PDFS = {
+        x.name.replace(".pdf", ""): x for x in Path(pdf_dir).glob("**/*.pdf")
+    }
+
+    to_move = py_.objects.omit_by(CACHED_PDFS, lambda _, k: k in CACHED_XMLS.keys())
+
+    new_cache_dir = to_new_cache(to_move.values())
+    
+    to_load = to_process.difference(to_move.keys())
+
+    if len(to_load) < 1:
+        return new_cache_dir, CACHED_XMLS
+
+    to_download = [ PDF_URL_MAP[id] for id in to_load if uri_validator(PDF_URL_MAP[id]) ]
+    to_upload = [ PDF_URL_MAP[id] for id in to_load if not uri_validator(PDF_URL_MAP[id]) ]
+
+    if len(to_download) > 0:
+        new_cache_dir = download_pdfs(to_download, new_cache_dir)
+
+    if len(to_upload) > 0:
+        new_cache_dir = upload_pdfs(to_upload, new_cache_dir)
+
+
+    return new_cache_dir, CACHED_XMLS
+
+
+
+def pdfs_to_xmls(pdfs_folder_name, CACHED_XMLS={}):
     grobid_version = os.environ.get('GROBID_VERSION')
     if pdfs_folder_name == None:
-        return cached_xmls
+        return CACHED_XMLS
 
     xmls_folder_name = f"./temp/xmls/{gen_datetime_name()}"
     Path(xmls_folder_name).mkdir(exist_ok=True, parents=True)
     try:
         os.system(f'java -Xmx4G -jar grobid-{grobid_version}/grobid-core/build/libs/grobid-core-{grobid_version}-onejar.jar -gH grobid-{grobid_version}/grobid-home -dIn {pdfs_folder_name} -dOut {xmls_folder_name} -exe processFullText')
+        os.system('clear')
         return {
-            **cached_xmls,
+            **CACHED_XMLS,
             **{
                 v.name.replace(".tei.xml", ""): v
                 for v in Path(xmls_folder_name).glob("*.tei.xml")
