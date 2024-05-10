@@ -14,6 +14,10 @@ from duckduckgo_search import DDGS, exceptions
 from icecream import ic
 from sentence_transformers import util
 import hashlib
+import requests
+from grobid_client.grobid_client import GrobidClient
+
+
 
 def create_file_id(file_name):
     tokens = file_name.split(' ')
@@ -85,8 +89,8 @@ def load_pdfs(papers):
             PDF_URL_MAP[create_file_id(paper.name.replace('.pdf',''))] = paper
 
     CACHED_XMLS = {
-        x.name.replace(".tei.xml", ""): x
-        for x in Path("temp/xmls").glob("**/*.tei.xml")
+        x.name.replace(".grobid.tei.xml", ""): x
+        for x in Path("temp/xmls").glob("**/*.grobid.tei.xml")
     }
     
     to_load = set(PDF_URL_MAP.keys())
@@ -94,7 +98,6 @@ def load_pdfs(papers):
 
     if len(to_process) < 1:
         return None, {k: CACHED_XMLS[k] for k in to_load}
-
 
     CACHED_PDFS = {
         x.name.replace(".pdf", ""): x for x in Path(pdf_dir).glob("**/*.pdf")
@@ -106,8 +109,11 @@ def load_pdfs(papers):
     
     to_load = to_process.difference(to_move.keys())
 
+    # ic(py_.pick_by(CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys()))
+    # exit()
     if len(to_load) < 1:
         return new_cache_dir, py_.pick_by(CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys())
+
 
     to_download = [ PDF_URL_MAP[id] for id in to_load if uri_validator(PDF_URL_MAP[id]) ]
     to_upload = [ PDF_URL_MAP[id] for id in to_load if not uri_validator(PDF_URL_MAP[id]) ]
@@ -119,32 +125,45 @@ def load_pdfs(papers):
         new_cache_dir = upload_pdfs(to_upload, new_cache_dir)
 
 
-    return new_cache_dir, CACHED_XMLS
+    return new_cache_dir, py_.pick_by(CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys())
 
 
 
 def pdfs_to_xmls(pdfs_folder_name, CACHED_XMLS={}):
-    grobid_version = os.environ.get('GROBID_VERSION')
     if pdfs_folder_name == None:
         ic(f'Already cached for files: {" ".join(CACHED_XMLS)}')
         return CACHED_XMLS
+    
+    xmls_folder_name = create_random_dir('temp/xmls/')
 
-    ic(Path(pdfs_folder_name).iterdir())
+    pdf_files = [f for f in Path(pdfs_folder_name).iterdir() if not f.is_dir()]
 
-    xmls_folder_name = f"./temp/xmls/{gen_datetime_name()}"
-    Path(xmls_folder_name).mkdir(exist_ok=True, parents=True)
-    try:
-        os.system(f'java -Xmx4G -jar grobid-{grobid_version}/grobid-core/build/libs/grobid-core-{grobid_version}-onejar.jar -gH grobid-{grobid_version}/grobid-home -dIn {pdfs_folder_name} -dOut {xmls_folder_name} -exe processFullText')
-        os.system('clear')
-        return {
-            **CACHED_XMLS,
-            **{
-                v.name.replace(".tei.xml", ""): v
-                for v in Path(xmls_folder_name).glob("*.tei.xml")
-            },
-        }
-    except:
-        Path(xmls_folder_name).rmdir()
+    client = GrobidClient(config_path="./config.json")
+    client.process("processFulltextDocument", pdfs_folder_name, output=xmls_folder_name, n=len(pdf_files), consolidate_header=False)
+
+    return {
+        **CACHED_XMLS,
+        **{
+            v.name.replace(".grobid.tei.xml", ""): v
+            for v in Path(xmls_folder_name).glob("*.grobid.tei.xml")
+        },
+    }
+    # grobid_version = os.environ.get('GROBID_VERSION')
+
+    # xmls_folder_name = f"./temp/xmls/{gen_datetime_name()}"
+
+    # try:
+    #     os.system(f'java -Xmx4G -jar grobid-{grobid_version}/grobid-core/build/libs/grobid-core-{grobid_version}-onejar.jar -gH grobid-{grobid_version}/grobid-home -dIn {pdfs_folder_name} -dOut {xmls_folder_name} -exe processFullText')
+    #     os.system('clear')
+    #     return {
+    #         **CACHED_XMLS,
+    #         **{
+    #             v.name.replace(".grobid.tei.xml", ""): v
+    #             for v in Path(xmls_folder_name).glob("*.grobid.tei.xml")
+    #         },
+    #     }
+    # except:
+    #     Path(xmls_folder_name).rmdir()
 
 def xml_to_body_text(xml_path):
     with open(xml_path, "r") as f:
