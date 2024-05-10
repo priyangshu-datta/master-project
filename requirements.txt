@@ -13,3 +13,4 @@ numpy
 lxml
 python-dotenv
 streamlit
+grobid-client-python
