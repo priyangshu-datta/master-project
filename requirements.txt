@@ -14,3 +14,5 @@ lxml
 python-dotenv
 streamlit
 grobid-client-python
+streamlit-pdf-viewer
+pymupdf

@@ -18,56 +18,61 @@ import requests
 from grobid_client.grobid_client import GrobidClient
 
 
-
 def create_file_id(file_name):
-    tokens = file_name.split(' ')
+    tokens = file_name.split(" ")
     if len(tokens) == 1:
         return file_name
     elif len(tokens) < 5:
-        return '-'.join(tokens)
+        return "-".join(tokens)
     else:
-        return hashlib.sha256(file_name.encode('utf-8')).hexdigest()
+        return hashlib.sha256(file_name.encode("utf-8")).hexdigest()
+
 
 gen_datetime_name = (
     lambda: f"{time.strftime('%Y%m%d%H%M%S')}{int((time.time() - int(time.time())) * 1000):03d}"
 )
 
-def create_random_dir(parent='.'):
+
+def create_random_dir(parent="."):
     new_cache_dir = f"{parent}/{gen_datetime_name()}"
     Path(new_cache_dir).mkdir(parents=True, exist_ok=True)
 
     return Path(new_cache_dir)
 
-def upload_pdfs(files, new_cache_dir=create_random_dir('temp/pdfs/')):
+
+def upload_pdfs(files, new_cache_dir=create_random_dir("temp/pdfs/")):
     for file in files:
-        file_id = create_file_id(file.name.replace('.pdf',''))
-        with open(str(new_cache_dir.joinpath(file_id)) + '.pdf', "wb") as f:
+        file_id = create_file_id(file.name.replace(".pdf", ""))
+        with open(str(new_cache_dir.joinpath(file_id)) + ".pdf", "wb") as f:
             f.write(file.getbuffer())
     return new_cache_dir
 
-def download_pdfs(urls, new_cache_dir=create_random_dir('temp/pdfs/')):
-    new_cache_dir = create_random_dir('temp/pdfs/')
+
+def download_pdfs(urls, new_cache_dir=create_random_dir("temp/pdfs/")):
+    new_cache_dir = create_random_dir("temp/pdfs/")
     to_load = {
-        parse.urlparse(url).path.split("/")[-1].replace(".pdf", ""): url
-        for url in urls
+        parse.urlparse(url).path.split("/")[-1].replace(".pdf", ""): url for url in urls
     }
     for id, url in to_load.items():
         request.urlretrieve(url, f"{new_cache_dir}/{id}.pdf")
-    
+
     return new_cache_dir
 
+
 def to_new_cache(files):
-    new_cache_dir = create_random_dir('temp/pdfs/')
+    new_cache_dir = create_random_dir("temp/pdfs/")
     for pdf_path in files:
         shutil.move(pdf_path, f"{new_cache_dir}/")
 
     # remove empty cache dirs
-    for folder in Path('temp/pdfs').glob("**/*"):
-        if folder.samefile(new_cache_dir): continue
+    for folder in Path("temp/pdfs").glob("**/*"):
+        if folder.samefile(new_cache_dir):
+            continue
         if folder.is_dir() and not any(folder.iterdir()):
             folder.rmdir()
 
     return new_cache_dir
+
 
 def uri_validator(x):
     try:
@@ -75,6 +80,11 @@ def uri_validator(x):
         return all([result.scheme, result.netloc])
     except AttributeError:
         return False
+
+
+def getall_pdf_path(pdf_dir):
+    return {x.name.replace(".pdf", ""): x for x in pdf_dir.glob("**/*.pdf")}
+
 
 def load_pdfs(papers):
     if len(papers) < 1:
@@ -84,39 +94,40 @@ def load_pdfs(papers):
     PDF_URL_MAP = {}
     for paper in papers:
         if uri_validator(paper):
-            PDF_URL_MAP[parse.urlparse(paper).path.split("/")[-1].replace(".pdf", "")] = paper
+            PDF_URL_MAP[
+                parse.urlparse(paper).path.split("/")[-1].replace(".pdf", "")
+            ] = paper
         else:
-            PDF_URL_MAP[create_file_id(paper.name.replace('.pdf',''))] = paper
+            PDF_URL_MAP[create_file_id(paper.name.replace(".pdf", ""))] = paper
 
     CACHED_XMLS = {
         x.name.replace(".grobid.tei.xml", ""): x
         for x in Path("temp/xmls").glob("**/*.grobid.tei.xml")
     }
-    
+
     to_load = set(PDF_URL_MAP.keys())
     to_process = to_load.difference(CACHED_XMLS.keys())
 
     if len(to_process) < 1:
         return None, {k: CACHED_XMLS[k] for k in to_load}
 
-    CACHED_PDFS = {
-        x.name.replace(".pdf", ""): x for x in Path(pdf_dir).glob("**/*.pdf")
-    }
+    CACHED_PDFS = getall_pdf_path(pdf_dir)
 
     to_move = py_.objects.omit_by(CACHED_PDFS, lambda _, k: k in CACHED_XMLS.keys())
 
     new_cache_dir = to_new_cache(to_move.values())
-    
+
     to_load = to_process.difference(to_move.keys())
 
-    # ic(py_.pick_by(CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys()))
-    # exit()
     if len(to_load) < 1:
-        return new_cache_dir, py_.pick_by(CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys())
+        return new_cache_dir, py_.pick_by(
+            CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys()
+        )
 
-
-    to_download = [ PDF_URL_MAP[id] for id in to_load if uri_validator(PDF_URL_MAP[id]) ]
-    to_upload = [ PDF_URL_MAP[id] for id in to_load if not uri_validator(PDF_URL_MAP[id]) ]
+    to_download = [PDF_URL_MAP[id] for id in to_load if uri_validator(PDF_URL_MAP[id])]
+    to_upload = [
+        PDF_URL_MAP[id] for id in to_load if not uri_validator(PDF_URL_MAP[id])
+    ]
 
     if len(to_download) > 0:
         new_cache_dir = download_pdfs(to_download, new_cache_dir)
@@ -124,22 +135,26 @@ def load_pdfs(papers):
     if len(to_upload) > 0:
         new_cache_dir = upload_pdfs(to_upload, new_cache_dir)
 
-
     return new_cache_dir, py_.pick_by(CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys())
-
 
 
 def pdfs_to_xmls(pdfs_folder_name, CACHED_XMLS={}):
     if pdfs_folder_name == None:
-        ic(f'Already cached for files: {" ".join(CACHED_XMLS)}')
+        # ic(f'Already cached for files: {" ".join(CACHED_XMLS)}')
         return CACHED_XMLS
-    
-    xmls_folder_name = create_random_dir('temp/xmls/')
+
+    xmls_folder_name = create_random_dir("temp/xmls/")
 
     pdf_files = [f for f in Path(pdfs_folder_name).iterdir() if not f.is_dir()]
 
     client = GrobidClient(config_path="./config.json")
-    client.process("processFulltextDocument", pdfs_folder_name, output=xmls_folder_name, n=len(pdf_files), consolidate_header=False)
+    client.process(
+        "processFulltextDocument",
+        pdfs_folder_name,
+        output=xmls_folder_name,
+        n=len(pdf_files),
+        consolidate_header=False,
+    )
 
     return {
         **CACHED_XMLS,
@@ -165,13 +180,14 @@ def pdfs_to_xmls(pdfs_folder_name, CACHED_XMLS={}):
     # except:
     #     Path(xmls_folder_name).rmdir()
 
+
 def xml_to_body_text(xml_path):
     with open(xml_path, "r") as f:
         paper = bs4(f, features="xml")
 
     [x.decompose() for x in paper.body.select("ref, figure, note")]
 
-    return re.sub("\s+", " ", paper.body.get_text("\n", True)).strip()
+    return re.sub(r"\s+", " ", paper.body.get_text("\n", True)).strip()
 
 
 prepare_grounding_passages = lambda docs: glm.GroundingPassages(
@@ -180,6 +196,7 @@ prepare_grounding_passages = lambda docs: glm.GroundingPassages(
     .map_(lambda passage, index: glm.GroundingPassage(content=passage, id=f"{index}"))
     .value()
 )
+
 
 def prepare_corpus(chunks, keywords, regex=True):
     isKeywordInChunk = lambda chunk, keyword: re.search(
@@ -256,49 +273,49 @@ generate_answer = py_.flow(
 
 regex_keywords_phrases = {
     EntityType.DATASET: [
-        "data(set|base)",
-        "anal(ytics|ysis)",
-        "resear(ch|ch paper)",
-        "stud(y|ies?)",
-        "exper(iment|iments?)",
-        "method(ology|ologies?)",
-        "collect(ion|ions?)",
-        "sampl(e|ing)",
-        "variabl(e|es?)",
-        "observ(ation|ations?)",
-        "surve(y|ys?)",
-        "popul(ation|ations?)",
-        "repositor(y|ies?)",
-        "databas(e|es?)",
-        "sourc(e|es?)",
-        "raw data",
-        "secondar(y|ies?)",
-        "primar(y|ies?)",
-        "min(e|ing)",
-        "proces(s|sing)",
-        "clean(ing|)",
-        "manipul(ation|ations?)",
-        "integrat(e|ion)",
-        "aggregat(e|ion)",
-        "visualiz(e|ation)",
-        "interpret(ation|ations?)",
-        "(used|employed|utilized) for (analysis|modeling|evaluation|research)",
-        "(trained|experimented) on",
-        "analy(zed|sis) (data|dataset)",
-        "(examined|derived|investigated|explored) (data|dataset)",
-        "(employed|modeled) with (data|dataset)",
-        "(evaluated|tested|compared) on",
-        "(referenced|applied) (dataset|data)",
-        "(accessed|reviewed) (data|dataset) from",
-        "data(-|\s)?set",
-        "task",
-        "challenge",
-        "(knowledge|data)\s*base",
-        "benchmark",
-        "(experiment|train|performance)[\sa-zA-Z0-9]+on",
-        "corpus",
-        "class",
-        "(train|test)[\sa-zA-Z0-9]+(set)?",
+        r"data(set|base)",
+        r"anal(ytics|ysis)",
+        r"resear(ch|ch paper)",
+        r"stud(y|ies?)",
+        r"exper(iment|iments?)",
+        r"method(ology|ologies?)",
+        r"collect(ion|ions?)",
+        r"sampl(e|ing)",
+        r"variabl(e|es?)",
+        r"observ(ation|ations?)",
+        r"surve(y|ys?)",
+        r"popul(ation|ations?)",
+        r"repositor(y|ies?)",
+        r"databas(e|es?)",
+        r"sourc(e|es?)",
+        r"raw data",
+        r"secondar(y|ies?)",
+        r"primar(y|ies?)",
+        r"min(e|ing)",
+        r"proces(s|sing)",
+        r"clean(ing|)",
+        r"manipul(ation|ations?)",
+        r"integrat(e|ion)",
+        r"aggregat(e|ion)",
+        r"visualiz(e|ation)",
+        r"interpret(ation|ations?)",
+        r"(used|employed|utilized) for (analysis|modeling|evaluation|research)",
+        r"(trained|experimented) on",
+        r"analy(zed|sis) (data|dataset)",
+        r"(examined|derived|investigated|explored) (data|dataset)",
+        r"(employed|modeled) with (data|dataset)",
+        r"(evaluated|tested|compared) on",
+        r"(referenced|applied) (dataset|data)",
+        r"(accessed|reviewed) (data|dataset) from",
+        r"data(-|\s)?set",
+        r"task",
+        r"challenge",
+        r"(knowledge|data)\s*base",
+        r"benchmark",
+        r"(experiment|train|performance)[\sa-zA-Z0-9]+on",
+        r"corpus",
+        r"class",
+        r"(train|test)[\sa-zA-Z0-9]+(set)?",
     ],
     EntityType.BASELINE: [
         "compared (to|with)",
@@ -370,12 +387,12 @@ query_embedder = lambda task_type: prepare_embeddings(queries[task_type])
 
 def verify_entity(entity, entity_type):
     sleep_interval = 1
-    query = re.sub("data ?set|corpus|treebank|database|( ){2,}",r"\1",entity)
+    query = re.sub("data ?set|corpus|treebank|database|( ){2,}", r"\1", entity)
     match entity_type:
         case EntityType.DATASET:
-            query = f'{query} +dataset'
+            query = f"{query} +dataset"
         case EntityType.BASELINE:
-            query = f'{query} +baseline'
+            query = f"{query} +baseline"
         case _:
             raise Exception("Entity Type: " + entity_type + " not supported.")
 
@@ -396,7 +413,7 @@ def verify_entity(entity, entity_type):
                 return False
             break
         except exceptions.RatelimitException:
-            ic('Error: DDGS rate limit exception!')
+            ic("Error: DDGS rate limit exception!")
             time.sleep(sleep_interval)
             sleep_interval *= 1.2
             continue
@@ -412,16 +429,23 @@ def verify_entity(entity, entity_type):
         lambda _: response.answer.content.parts[0].text, None
     )
     try:
-        response = False if attempted_answer == None else "y" in attempted_answer.lower()
+        response = (
+            False if attempted_answer == None else "y" in attempted_answer.lower()
+        )
         return response
     except:
         ic(attempted_answer)
         return False
 
 
-
 def extract_entities(
-    chunks, q_embeds, entity_type, keywords=None, entities=set(), verify=True, temperature=None
+    chunks,
+    q_embeds,
+    entity_type,
+    keywords=None,
+    entities=set(),
+    verify=True,
+    temperature=None,
 ):
     keywords = keywords or regex_keywords_phrases[entity_type]
     corpus = prepare_corpus(chunks, keywords=keywords, regex=len(entities) < 1)
@@ -456,7 +480,7 @@ def extract_entities(
             continue
         attempted_answer = re.sub(rf"\({text_in_brackets}\)", "", attempted_answer)
 
-    attempted_answer = sub_ci(" \w+ et\.? al\.", "")(attempted_answer)
+    attempted_answer = sub_ci(r" \w+ et\.? al\.", "")(attempted_answer)
     temp_datasets = (
         py_.chain(attempted_answer.split(", "))
         .map_(lambda x: x.strip())
@@ -474,7 +498,10 @@ def extract_entities(
     if verify:
         entities = set(
             py_.objects.get(
-                py_.objects.invert_by({x: verify_entity(x, entity_type) for x in entities}), True
+                py_.objects.invert_by(
+                    {x: verify_entity(x, entity_type) for x in entities}
+                ),
+                True,
             )
             or []
         )
@@ -492,6 +519,4 @@ def extract_entities(
                 {re.sub(rf"\({_}\)", "", dataset).strip() for _ in m}
             )
 
-    return extract_entities(
-        chunks, q_embeds, entity_type, entity_keywords, entities
-    )
+    return extract_entities(chunks, q_embeds, entity_type, entity_keywords, entities)

@@ -1,5 +1,4 @@
-from strenum import StrEnum
-from enum import auto
+from enum import auto, StrEnum
 
 class EntityType(StrEnum):
     DATASET = auto()
