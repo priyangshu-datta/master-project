@@ -32,7 +32,7 @@ def main():
     df = pd.DataFrame([{"URL": None, "Include": False}])
     edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True).dropna().query('Include == True')
 
-    files = st.file_uploader("Upload Research Paper", "pdf", True)
+    files = st.file_uploader("Mulitple uploads allowed", "pdf", True)
 
     if files or len(set(edited_df["URL"].to_list())) > 0:
         files = files + edited_df["URL"].to_list()
