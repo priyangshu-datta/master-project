@@ -8,7 +8,7 @@ from icecream import ic
 def annotate_pdf(pdf_path, entities):
     doc = pypdf.open(pdf_path)
     stroke_color = {
-        entity: (random.random(), random.random(), random.random())
+        entity: (random.random(), random.random(), 0) # research papers are filled with blues already
         for entity in entities
     }
     for pi in range(doc.page_count):
