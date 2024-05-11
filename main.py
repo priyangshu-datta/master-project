@@ -47,6 +47,8 @@ def main():
             datasets = text_to_entities(text_chain, verify=True, temperature=0.06)
 
         CACHED_PDFS = utils.getall_pdf_path(Path("temp/pdfs"))
+
+        # save datasets in a state. move the following code out of this.
         tabs = st.tabs(datasets.keys())
 
         for tab, paper_id in zip(tabs, datasets.keys()):
@@ -78,3 +80,6 @@ if __name__ == "__main__":
 #     ic('GROBID initialized successfully!')
 # else:
 #     ic('Something went wrong initializing GROBID.')
+
+
+# TODO: Break the paper into multiple sub-papers and run the task parallely lastly join the output.
