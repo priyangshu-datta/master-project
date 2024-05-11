@@ -481,33 +481,33 @@ def extract_entities(
         attempted_answer = re.sub(rf"\({text_in_brackets}\)", "", attempted_answer)
 
     attempted_answer = sub_ci(r" \w+ et\.? al\.", "")(attempted_answer)
-    temp_datasets = (
+    temp_entities = (
         py_.chain(attempted_answer.split(", "))
         .map_(lambda x: x.strip())
         .filter_(lambda x: len(x.split(" ")) < 10 and "et al." not in x)
-        .apply(list)
         .value()
     )
-    temp_datasets = entities.union(temp_datasets)
-
-    if temp_datasets - entities == set():
-        return entities
-
-    entities = temp_datasets
-
+    
     if verify:
-        entities = set(
+        temp_entities = set(
             py_.objects.get(
                 py_.objects.invert_by(
-                    {x: verify_entity(x, entity_type) for x in entities}
+                    {entity: verify_entity(entity, entity_type) for entity in temp_entities}
                 ),
                 True,
             )
             or []
         )
+    
+    temp_entities = entities.union(temp_entities)
 
-    if len(entities) == 0:
-        return
+    if temp_entities - entities == set():
+        return entities
+
+    entities = temp_entities
+
+    # if len(entities) == 0:
+    #     return
 
     entity_keywords = entities
 
@@ -520,3 +520,13 @@ def extract_entities(
             )
 
     return extract_entities(chunks, q_embeds, entity_type, entity_keywords, entities)
+
+# TODO: write a forker to use threading or 
+# TODO: mulitprocessing to divide the task of 
+# TODO: entity extraction into multiple 
+# TODO: process or threads. (Optimization)
+# def forker(multple_papers_info):
+# 
+#   // fork_into_mulitple_extract_entities
+# 
+#   return multiple_papers_entites
