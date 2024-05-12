@@ -9,3 +9,4 @@ logs
 *.zip
 .devcontainer
 venv
+scratch.*

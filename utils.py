@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup as bs4
 import re
 from urllib import request, parse
 import google.ai.generativelanguage as glm
+from rsa import verify
 from processing import embedder, sub_ci
 from google_oauth import generative_service_client
 from enums import EntityType
@@ -49,7 +50,6 @@ def upload_pdfs(files, new_cache_dir=create_random_dir("temp/pdfs/")):
 
 
 def download_pdfs(urls, new_cache_dir=create_random_dir("temp/pdfs/")):
-    new_cache_dir = create_random_dir("temp/pdfs/")
     to_load = {
         parse.urlparse(url).path.split("/")[-1].replace(".pdf", ""): url for url in urls
     }
@@ -58,18 +58,16 @@ def download_pdfs(urls, new_cache_dir=create_random_dir("temp/pdfs/")):
 
     return new_cache_dir
 
+def remove_empty_dirs(parent_dir):
+    for folder in parent_dir.glob("**/*"):
+        if folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+
 
 def to_new_cache(files):
     new_cache_dir = create_random_dir("temp/pdfs/")
     for pdf_path in files:
         shutil.move(pdf_path, f"{new_cache_dir}/")
-
-    # remove empty cache dirs
-    for folder in Path("temp/pdfs").glob("**/*"):
-        if folder.samefile(new_cache_dir):
-            continue
-        if folder.is_dir() and not any(folder.iterdir()):
-            folder.rmdir()
 
     return new_cache_dir
 
@@ -120,6 +118,7 @@ def load_pdfs(papers):
     to_load = to_process.difference(to_move.keys())
 
     if len(to_load) < 1:
+        remove_empty_dirs(pdf_dir)
         return new_cache_dir, py_.pick_by(
             CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys()
         )
@@ -135,6 +134,7 @@ def load_pdfs(papers):
     if len(to_upload) > 0:
         new_cache_dir = upload_pdfs(to_upload, new_cache_dir)
 
+    remove_empty_dirs(pdf_dir)
     return new_cache_dir, py_.pick_by(CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys())
 
 
@@ -385,58 +385,93 @@ queries = {
 query_embedder = lambda task_type: prepare_embeddings(queries[task_type])
 
 
-def verify_entity(entity, entity_type):
-    sleep_interval = 1
-    query = re.sub("data ?set|corpus|treebank|database|( ){2,}", r"\1", entity)
-    match entity_type:
-        case EntityType.DATASET:
-            query = f"{query} +dataset"
-        case EntityType.BASELINE:
-            query = f"{query} +baseline"
-        case _:
-            raise Exception("Entity Type: " + entity_type + " not supported.")
-
-    while True:
-        try:
-            docs = (
-                py_.chain(
-                    DDGS().text(
-                        query,
-                        max_results=5,
-                        backend="html",
-                    )
+def verify_counter():
+    last_time = time.time()
+    
+    def verify_entity(entity, entity_type):
+        
+        nonlocal last_time
+        
+        sleep_interval = 1
+        
+        match entity_type:
+            case EntityType.DATASET:
+                query = re.sub(
+                    "data ?set|corpus|treebank|database|( ){2,}", 
+                    r"\1", 
+                    entity
                 )
-                .map_(lambda x: f"{x['title']}: {x['body']}")
-                .value()
-            )
-            if len(docs) < 1:
-                return False
-            break
-        except exceptions.RatelimitException:
-            ic("Error: DDGS rate limit exception!")
-            time.sleep(sleep_interval)
-            sleep_interval *= 1.2
-            continue
-        except:
-            return
+                query = f"{query} +dataset"
+            case EntityType.BASELINE:
+                query = re.sub(
+                    "baseline|( ){2,}", 
+                    r"\1", 
+                    entity
+                )
+                query = f"{query} +baseline"
+            case _:
+                raise Exception("Entity Type: " + entity_type + " not supported.")
+            
+        query = py_.chain(
+            query.split(" ")
+        ).filter_(
+            lambda tok: len(tok) > 2
+        ).apply(
+            lambda x: py_.join(x, " ")
+        ).value()
 
-    grounding_passages = prepare_grounding_passages(docs)
+        while True:
+            try:
+                while time.time() - last_time < 0.07:
+                    ic('wait!')
+                    time.sleep(0.05)
+                    continue
+                
+                docs = (
+                    py_.chain(
+                        DDGS().text(
+                            query,
+                            max_results=5,
+                            backend="html",
+                        )
+                    )
+                    .map_(lambda x: f"{x['title']}: {x['body']}")
+                    .value()
+                )
+                
+                last_time = time.time()
+                
+                if len(docs) < 1:
+                    return False
+                break
+            except exceptions.RatelimitException as e:
+                ic("Error: DDGS rate limit exception!", e)
+                time.sleep(sleep_interval)
+                sleep_interval *= 1.2
+                continue
+            except:
+                return
 
-    query_content = prepare_query_content(f"Is {entity} a data set? (y/n)")
+        grounding_passages = prepare_grounding_passages(docs)
 
-    response = generate_answer(grounding_passages, query_content)
-    attempted_answer = py_.attempt(
-        lambda _: response.answer.content.parts[0].text, None
-    )
-    try:
-        response = (
-            False if attempted_answer == None else "y" in attempted_answer.lower()
+        query_content = prepare_query_content(f"Is {entity} a data set? (y/n)")
+
+        response = generate_answer(grounding_passages, query_content)
+        attempted_answer = py_.attempt(
+            lambda _: response.answer.content.parts[0].text, None
         )
-        return response
-    except:
-        ic(attempted_answer)
-        return False
+        try:
+            response = (
+                False if attempted_answer == None else "y" in attempted_answer.lower()
+            )
+            return response
+        except:
+            ic(attempted_answer)
+            return False
 
+    return verify_entity
+    
+verify_entity = verify_counter()
 
 def extract_entities(
     chunks,
@@ -489,6 +524,7 @@ def extract_entities(
     )
     
     if verify:
+        # using threads will not be helpful due to RateLimitException
         temp_entities = set(
             py_.objects.get(
                 py_.objects.invert_by(
@@ -519,7 +555,7 @@ def extract_entities(
                 {re.sub(rf"\({_}\)", "", dataset).strip() for _ in m}
             )
 
-    return extract_entities(chunks, q_embeds, entity_type, entity_keywords, entities)
+    return extract_entities(chunks, q_embeds, entity_type, entity_keywords, entities, verify)
 
 # TODO: write a forker to use threading or 
 # TODO: mulitprocessing to divide the task of 
