@@ -47,7 +47,9 @@ def handleClick(files, verify, entity_types, force_rerun):
         if len(files) < 1:
             return
 
+        ic(f"Pre-processing pdfs")
         text_chain = pdfs_to_text(files)
+        ic(f"Pre-processed pdfs")
 
         for entity_type in entity_types:
             entity_text_chain = text_chain.filter_(
@@ -57,6 +59,7 @@ def handleClick(files, verify, entity_types, force_rerun):
 
             if force_rerun:
                 entity_text_chain = text_chain
+            ic("Starting extraction...")
             st.session_state["entities"][entity_type] = {
                 **text_to_entities(
                     entity_text_chain,
@@ -66,6 +69,7 @@ def handleClick(files, verify, entity_types, force_rerun):
                 ),
                 **st.session_state["entities"][entity_type],
             }
+            ic("Extracted")
 
         st.session_state["research_papers"] = (
             py_.chain(st.session_state["entities"].values())
