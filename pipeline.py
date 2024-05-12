@@ -9,10 +9,6 @@ chunker = py_.flow(
     lambda x: group_sentences(x, 200, 2),
 )
 
-entity_type = EntityType.DATASET
-
-query_embeds = query_embedder(entity_type)
-
 clean_entities = (
     lambda entities: py_.chain(entities)
     .map_(sub_ci(" +", " "))
@@ -32,12 +28,12 @@ dmddID_to_text = lambda ids, dmdd: py_.chain(ids).reduce_(
 ).apply(py_.to_pairs)
 
 
-text_to_entities = lambda text_chain, verify=True, temperature=None: text_chain.map_(
+text_to_entities = lambda text_chain, entity_type, verify=True, temperature=None: text_chain.map_(
     lambda id_text: (id_text[0], chunker(id_text[1]))
 ).map_(
     lambda id_chunks: (
         id_chunks[0],
-        extract_entities(id_chunks[1], query_embeds, entity_type, verify=verify, temperature=temperature),
+        extract_entities(id_chunks[1], query_embedder(entity_type), entity_type, verify=verify, temperature=temperature),
     )
 ).map_(
     lambda id_entities: (id_entities[0], clean_entities(id_entities[1]))
