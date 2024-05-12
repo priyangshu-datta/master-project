@@ -98,7 +98,7 @@ def main():
     if st.button(
         (
             "Begin Extraction"
-            if not st.session_state["extract_btn_disable"]
+            if not st.session_state.btn_disable
             else "Extracting..."
         ),
         key="extract_button",
