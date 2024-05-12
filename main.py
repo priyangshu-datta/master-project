@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from pathlib import Path
+import shutil
 import utils
 from pipeline import pdfs_to_text, text_to_entities
 import streamlit as st
@@ -230,7 +231,7 @@ def main():
     #             )
 
     # remove the temp folders
-    # shutil.rmtree('temp')
+    shutil.rmtree('temp')
 
 
 if __name__ == "__main__":
