@@ -3,10 +3,8 @@ nltk
 pydash
 icecream
 beautifulsoup4
-StrEnum
 duckduckgo_search
 google.ai.generativelanguage
-google-generativeai
 google-auth-oauthlib
 pandas
 numpy
@@ -16,3 +14,4 @@ streamlit
 grobid-client-python
 streamlit-pdf-viewer
 pymupdf
+extra_streamlit_components
