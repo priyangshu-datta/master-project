@@ -30,36 +30,17 @@ if "entities" not in st.session_state:
 
 if "research_papers" not in st.session_state:
     st.session_state["research_papers"] = set()
+    
+if 'extract_button' in st.session_state and st.session_state.extract_button == True:
+    st.session_state.btn_disable = True
+else:
+    st.session_state.btn_disable = False
 
 
-def main():
-    Path("temp/pdfs/").mkdir(exist_ok=True, parents=True)
-    Path("temp/xmls/").mkdir(exist_ok=True, parents=True)
-    for entity_type in EntityType:
-        Path(f"temp/views/{entity_type}").mkdir(exist_ok=True, parents=True)
-    Path("temp/transformers/model/").mkdir(exist_ok=True, parents=True)
-
-    URL_df = pd.DataFrame([{"URL": None, "Include": False}])
-    edited_df = (
-        st.data_editor(URL_df, num_rows="dynamic", use_container_width=True)
-        .dropna()
-        .query("Include == True")
-    )
-
-    files = st.file_uploader("Mulitple uploads allowed", "pdf", True)
-
-    if files or len(set(edited_df["URL"].to_list())) > 0:
-        files = files + edited_df["URL"].to_list()
-        entity_types = st.multiselect(
-            "Entities to extract", list(EntityType), format_func=py_.human_case
-        )
-        verify = st.toggle("Verify entities", value=True)
-        st.button(
-            "Begin Extraction",
-            on_click=lambda: handleClick(files, verify, entity_types),
-        )
-
-    def handleClick(files, verify, entity_types):
+def handleClick(files, verify, entity_types, force_rerun):
+        if len(files) < 1:
+            return
+        
         files = files if files else []
 
         if len(files) < 1:
@@ -73,7 +54,7 @@ def main():
                 not in list(st.session_state["entities"][entity_type].keys())
             )
 
-            if force_rerun := False:
+            if force_rerun:
                 entity_text_chain = text_chain
             st.session_state["entities"][entity_type] = {
                 **text_to_entities(
@@ -93,6 +74,39 @@ def main():
             .value()
         )
 
+
+def main():
+    Path("temp/pdfs/").mkdir(exist_ok=True, parents=True)
+    Path("temp/xmls/").mkdir(exist_ok=True, parents=True)
+    for entity_type in EntityType:
+        Path(f"temp/views/{entity_type}").mkdir(exist_ok=True, parents=True)
+    Path("temp/transformers/model/").mkdir(exist_ok=True, parents=True)
+
+    URL_df = pd.DataFrame([{"URL": None, "Include": False}])
+    edited_df = (
+        st.data_editor(URL_df, num_rows="dynamic", use_container_width=True)
+        .dropna()
+        .query("Include == True")
+    )
+
+    files = st.file_uploader("Mulitple uploads allowed", "pdf", True) + edited_df["URL"].to_list()
+    entity_types = st.multiselect(
+        "Entities to extract", list(EntityType), format_func=py_.human_case
+    )
+    verify = st.toggle("Verify entities", value=True)
+    force_rerun = st.checkbox("Force rerun", value=False)
+    if st.button(
+        (
+            "Begin Extraction"
+            if not st.session_state["extract_btn_disable"]
+            else "Extracting..."
+        ),
+        key="extract_button",
+        disabled=st.session_state.btn_disable,
+    ):
+        handleClick(files, verify, entity_types, force_rerun)
+        st.rerun()
+
     CACHED_PDFS = utils.getall_pdf_path(Path("temp/pdfs"))
     ANNOTATED_CACHED_PDFS = {}
     for entity_type in EntityType:
@@ -101,14 +115,13 @@ def main():
         )
 
     if len(st.session_state["research_papers"]) < 1:
-        ic(st.session_state["research_papers"])
         return
-
+    
     with st.container(border=True):
 
         r_tab = stx.tab_bar(
             data=[
-                stx.TabBarItemData(i, r, None)
+                stx.TabBarItemData(i, py_.truncate(r,10), None)
                 for i, r in enumerate(st.session_state["research_papers"])
             ],
             default=0,
@@ -116,20 +129,31 @@ def main():
         )
 
         with st.container(border=True):
+            paper_id = list(st.session_state["research_papers"])[r_tab]
 
             e_tab = stx.tab_bar(
                 data=[
                     stx.TabBarItemData(i, py_.human_case(e), None)
-                    for i, e in enumerate(EntityType)
+                    for i, e in enumerate(
+                        py_.chain(st.session_state["entities"])
+                        .to_pairs()
+                        .filter_(lambda ents: paper_id in ents[1])
+                        .map_(lambda ents: ents[0])
+                        .value()
+                    )
                 ],
                 default=0,
                 return_type=int,
             )
-            
-            entity_type = list(EntityType)[e_tab]
-            paper_id = list(st.session_state["research_papers"])[r_tab]
-            
-            
+
+            entity_type = list(
+                py_.chain(st.session_state["entities"])
+                .to_pairs()
+                .filter_(lambda ents: paper_id in ents[1])
+                .map_(lambda ents: ents[0])
+                .value()
+            )[e_tab]
+
             if paper_id not in ANNOTATED_CACHED_PDFS[entity_type]:
                 annotate_pdf(
                     CACHED_PDFS[paper_id],
@@ -140,25 +164,20 @@ def main():
             if len(st.session_state["entities"][entity_type][paper_id]) < 1:
                 st.write(f"No {entity_type}s found in paper {paper_id}.")
             else:
-                st.write(
-                    f"{py_.human_case(entity_type)} found in paper {paper_id}."
-                )
-            
+                st.write(f"{py_.human_case(entity_type)} found in paper {paper_id}.")
+
                 st.table(
                     {
-                        f"{py_.human_case(entity_type)}": st.session_state[
-                            "entities"
-                        ][entity_type][paper_id]
+                        f"{py_.human_case(entity_type)}": st.session_state["entities"][
+                            entity_type
+                        ][paper_id]
                     }
                 )
 
                 pdf_viewer(
                     Path("temp/views")
-                    .joinpath(
-                        entity_type, paper_id
-                    )
-                    .with_suffix(".pdf"),
-                    height=500
+                    .joinpath(entity_type, paper_id + ".pdf"),
+                    height=500,
                 )
 
             # st.write(st.session_state["entities"][list(EntityType)[e_tab]][list(st.session_state["research_papers"])[r_tab]])
@@ -179,28 +198,28 @@ def main():
     #             if len(entities) < 1:
     #                 continue
 
-                # if paper_id not in ANNOTATED_CACHED_PDFS[entity_type]:
-                #     annotate_pdf(
-                #         CACHED_PDFS[paper_id],
-                #         entity_type,
-                #         st.session_state["entities"][entity_type][paper_id],
-                #     )
+    # if paper_id not in ANNOTATED_CACHED_PDFS[entity_type]:
+    #     annotate_pdf(
+    #         CACHED_PDFS[paper_id],
+    #         entity_type,
+    #         st.session_state["entities"][entity_type][paper_id],
+    #     )
 
-                # if len(st.session_state["entities"][entity_type][paper_id]) < 1:
-                #     st.write(f"No {entity_type}s found in paper {paper_id}.")
-                #     continue
+    # if len(st.session_state["entities"][entity_type][paper_id]) < 1:
+    #     st.write(f"No {entity_type}s found in paper {paper_id}.")
+    #     continue
 
-                # st.write(
-                #     f"{py_.human_case(entity_type)} found in paper {paper_id}."
-                # )
+    # st.write(
+    #     f"{py_.human_case(entity_type)} found in paper {paper_id}."
+    # )
 
-                # st.table(
-                #     {
-                #         f"{py_.human_case(entity_type)}": st.session_state[
-                #             "entities"
-                #         ][entity_type][paper_id]
-                #     }
-                # )
+    # st.table(
+    #     {
+    #         f"{py_.human_case(entity_type)}": st.session_state[
+    #             "entities"
+    #         ][entity_type][paper_id]
+    #     }
+    # )
 
     #             pdf_viewer(
     #                 Path("temp/views")
