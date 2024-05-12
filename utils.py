@@ -41,7 +41,9 @@ def create_random_dir(parent="."):
     return Path(new_cache_dir)
 
 
-def upload_pdfs(files, new_cache_dir=create_random_dir("temp/pdfs/")):
+def upload_pdfs(files, new_cache_dir=None):
+    if new_cache_dir == None:
+        create_random_dir("temp/pdfs/")
     for file in files:
         file_id = create_file_id(file.name.replace(".pdf", ""))
         with open(str(new_cache_dir.joinpath(file_id)) + ".pdf", "wb") as f:
@@ -49,7 +51,9 @@ def upload_pdfs(files, new_cache_dir=create_random_dir("temp/pdfs/")):
     return new_cache_dir
 
 
-def download_pdfs(urls, new_cache_dir=create_random_dir("temp/pdfs/")):
+def download_pdfs(urls, new_cache_dir=None):
+    if new_cache_dir == None:
+        create_random_dir("temp/pdfs/")
     to_load = {
         parse.urlparse(url).path.split("/")[-1].replace(".pdf", ""): url for url in urls
     }
@@ -58,8 +62,10 @@ def download_pdfs(urls, new_cache_dir=create_random_dir("temp/pdfs/")):
 
     return new_cache_dir
 
+
 def remove_empty_dirs(parent_dir):
-    for folder in parent_dir.glob("**/*"):
+    for folder in parent_dir.iterdir():
+        ic(folder.is_dir() and not any(folder.iterdir()))
         if folder.is_dir() and not any(folder.iterdir()):
             folder.rmdir()
 
@@ -387,46 +393,39 @@ query_embedder = lambda task_type: prepare_embeddings(queries[task_type])
 
 def verify_counter():
     last_time = time.time()
-    
+
     def verify_entity(entity, entity_type):
-        
+
         nonlocal last_time
-        
+
         sleep_interval = 1
-        
+
         match entity_type:
             case EntityType.DATASET:
                 query = re.sub(
-                    "data ?set|corpus|treebank|database|( ){2,}", 
-                    r"\1", 
-                    entity
+                    "data ?set|corpus|treebank|database|( ){2,}", r"\1", entity
                 )
                 query = f"{query} +dataset"
             case EntityType.BASELINE:
-                query = re.sub(
-                    "baseline|( ){2,}", 
-                    r"\1", 
-                    entity
-                )
+                query = re.sub("baseline|( ){2,}", r"\1", entity)
                 query = f"{query} +baseline"
             case _:
                 raise Exception("Entity Type: " + entity_type + " not supported.")
-            
-        query = py_.chain(
-            query.split(" ")
-        ).filter_(
-            lambda tok: len(tok) > 2
-        ).apply(
-            lambda x: py_.join(x, " ")
-        ).value()
+
+        query = (
+            py_.chain(query.split(" "))
+            .filter_(lambda tok: len(tok) > 2)
+            .apply(lambda x: py_.join(x, " "))
+            .value()
+        )
 
         while True:
             try:
                 while time.time() - last_time < 0.07:
-                    ic('wait!')
+                    ic("wait!")
                     time.sleep(0.05)
                     continue
-                
+
                 docs = (
                     py_.chain(
                         DDGS().text(
@@ -438,9 +437,9 @@ def verify_counter():
                     .map_(lambda x: f"{x['title']}: {x['body']}")
                     .value()
                 )
-                
+
                 last_time = time.time()
-                
+
                 if len(docs) < 1:
                     return False
                 break
@@ -470,8 +469,10 @@ def verify_counter():
             return False
 
     return verify_entity
-    
+
+
 verify_entity = verify_counter()
+
 
 def extract_entities(
     chunks,
@@ -522,19 +523,22 @@ def extract_entities(
         .filter_(lambda x: len(x.split(" ")) < 10 and "et al." not in x)
         .value()
     )
-    
+
     if verify:
         # using threads will not be helpful due to RateLimitException
         temp_entities = set(
             py_.objects.get(
                 py_.objects.invert_by(
-                    {entity: verify_entity(entity, entity_type) for entity in temp_entities}
+                    {
+                        entity: verify_entity(entity, entity_type)
+                        for entity in temp_entities
+                    }
                 ),
                 True,
             )
             or []
         )
-    
+
     temp_entities = entities.union(temp_entities)
 
     if temp_entities - entities == set():
@@ -555,14 +559,17 @@ def extract_entities(
                 {re.sub(rf"\({_}\)", "", dataset).strip() for _ in m}
             )
 
-    return extract_entities(chunks, q_embeds, entity_type, entity_keywords, entities, verify)
+    return extract_entities(
+        chunks, q_embeds, entity_type, entity_keywords, entities, verify
+    )
 
-# TODO: write a forker to use threading or 
-# TODO: mulitprocessing to divide the task of 
-# TODO: entity extraction into multiple 
+
+# TODO: write a forker to use threading or
+# TODO: mulitprocessing to divide the task of
+# TODO: entity extraction into multiple
 # TODO: process or threads. (Optimization)
 # def forker(multple_papers_info):
-# 
+#
 #   // fork_into_mulitple_extract_entities
-# 
+#
 #   return multiple_papers_entites
