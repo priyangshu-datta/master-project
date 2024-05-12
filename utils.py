@@ -502,6 +502,7 @@ def extract_entities(
         ),
     )
 
+    ic("Prompting LLM")
     response = generate_answer(grounding_passages, query_content, temperature)
     attempted_answer = py_.attempt(
         lambda _: response.answer.content.parts[0].text, None
@@ -526,6 +527,7 @@ def extract_entities(
 
     if verify:
         # using threads will not be helpful due to RateLimitException
+        ic("Verifying...")
         temp_entities = set(
             py_.objects.get(
                 py_.objects.invert_by(

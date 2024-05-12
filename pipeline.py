@@ -30,12 +30,12 @@ dmddID_to_text = lambda ids, dmdd: py_.chain(ids).reduce_(
 
 text_to_entities = lambda text_chain, entity_type, verify=True, temperature=None: text_chain.map_(
     lambda id_text: (id_text[0], chunker(id_text[1]))
-).map_(
+).tap(lambda: ic("Text chunked")).map_(
     lambda id_chunks: (
         id_chunks[0],
         extract_entities(id_chunks[1], query_embedder(entity_type), entity_type, verify=verify, temperature=temperature),
     )
-).map_(
+).tap(lambda: ic("extracted and verified")).map_(
     lambda id_entities: (id_entities[0], clean_entities(id_entities[1]))
 ).apply(
     py_.from_pairs
