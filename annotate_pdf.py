@@ -19,10 +19,10 @@ def annotate_pdf(pdf_path, entity_type, entities):
 
         for entity, instances in entities_instances.items():
             for inst in instances:
-                annot = page.add_highlight_annot(inst)
+                annot = page.add_rect_annot(inst)
                 annot.set_colors(stroke=stroke_color[entity], fill=stroke_color[entity])
                 annot.set_opacity(0.5)
                 annot.update()
 
-    doc.save(Path(f"temp/views/{entity_type}/").joinpath(pdf_path.name + ''.join(pdf_path.suffixes)))
+    doc.save(Path(f"temp/views/{entity_type}/").joinpath(pdf_path.name))
     doc.close()

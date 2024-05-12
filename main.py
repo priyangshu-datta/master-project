@@ -32,52 +32,52 @@ if "entities" not in st.session_state:
 if "research_papers" not in st.session_state:
     st.session_state["research_papers"] = set()
     
-if 'extract_button' in st.session_state and st.session_state.extract_button == True:
+if 'extract_btn' in st.session_state and st.session_state.extract_btn == True:
     st.session_state.btn_disable = True
 else:
     st.session_state.btn_disable = False
 
-
 def handleClick(files, verify, entity_types, force_rerun):
-        if len(files) < 1:
-            return
-        
-        files = files if files else []
+    if len(files) < 1:
+        return
+    
+    files = files if files else []
 
-        if len(files) < 1:
-            return
+    if len(files) < 1:
+        return
 
-        ic(f"Pre-processing pdfs")
-        text_chain = pdfs_to_text(files)
-        ic(f"Pre-processed pdfs")
+    ic(f"Pre-processing pdfs")
+    text_chain = pdfs_to_text(files)
+    ic(f"Pre-processed pdfs")
 
-        for entity_type in entity_types:
-            entity_text_chain = text_chain.filter_(
-                lambda id_path: id_path[0]
-                not in list(st.session_state["entities"][entity_type].keys())
-            )
-
-            if force_rerun:
-                entity_text_chain = text_chain
-            ic("Starting extraction...")
-            st.session_state["entities"][entity_type] = {
-                **text_to_entities(
-                    entity_text_chain,
-                    entity_type,
-                    verify=verify,
-                    temperature=LLM_TEMPERATURE,
-                ),
-                **st.session_state["entities"][entity_type],
-            }
-            ic("Extracted")
-
-        st.session_state["research_papers"] = (
-            py_.chain(st.session_state["entities"].values())
-            .map_(lambda ent_dict: list(ent_dict.keys()))
-            .flatten()
-            .apply(set)
-            .value()
+    for entity_type in entity_types:
+        entity_text_chain = text_chain.filter_(
+            lambda id_path: id_path[0]
+            not in list(st.session_state["entities"][entity_type].keys())
         )
+
+        if force_rerun:
+            entity_text_chain = text_chain
+        ic("Starting extraction...")
+        st.session_state["entities"][entity_type] = {
+            **text_to_entities(
+                entity_text_chain,
+                entity_type,
+                verify=verify,
+                temperature=LLM_TEMPERATURE,
+            ),
+            **st.session_state["entities"][entity_type],
+        }
+        ic("Extracted")
+
+    st.session_state["research_papers"] = (
+        py_.chain(st.session_state["entities"].values())
+        .map_(lambda ent_dict: list(ent_dict.keys()))
+        .flatten()
+        .apply(set)
+        .value()
+    )
+
 
 
 def main():
@@ -100,18 +100,24 @@ def main():
     )
     verify = st.toggle("Verify entities", value=True)
     force_rerun = st.checkbox("Force rerun", value=False)
-    if st.button(
+    st.button(
         (
             "Begin Extraction"
             if not st.session_state.btn_disable
             else "Extracting..."
         ),
-        key="extract_button",
+        key="extract_btn",
         disabled=st.session_state.btn_disable,
-    ):
+        # on_click=handleClick,
+        # args=[files,verify,entity_types,force_rerun]
+    )
+    
+    if st.session_state.btn_disable:
         handleClick(files, verify, entity_types, force_rerun)
         st.rerun()
-
+        
+    
+    
     CACHED_PDFS = utils.getall_pdf_path(Path("temp/pdfs"))
     ANNOTATED_CACHED_PDFS = {}
     for entity_type in EntityType:
@@ -235,7 +241,7 @@ def main():
     #             )
 
     # remove the temp folders
-    shutil.rmtree('temp')
+    # shutil.rmtree('temp')
 
 
 if __name__ == "__main__":
