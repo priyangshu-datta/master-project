@@ -3,9 +3,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from pathlib import Path
+import hashlib
 import shutil
 import utils
-from pipeline import pdfs_to_text, text_to_entities
+import pipeline as pl
 import streamlit as st
 import pydash as py_
 import pandas as pd
@@ -14,6 +15,10 @@ from annotate_pdf import annotate_pdf
 from enums import EntityType
 from icecream import ic
 import extra_streamlit_components as stx
+from data_classes import Paper, TaskObject
+from bs4 import BeautifulSoup as bs4
+import time
+from error_codes import ERROR_CODES
 
 
 LLM_TEMPERATURE = 0.06
@@ -26,58 +31,80 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-if "entities" not in st.session_state:
-    st.session_state["entities"] = {entity_type: {} for entity_type in EntityType}
+# if "entities" not in st.session_state:
+#     st.session_state["entities"] = {entity_type: {} for entity_type in EntityType}
 
-if "research_papers" not in st.session_state:
-    st.session_state["research_papers"] = set()
-    
-if 'extract_btn' in st.session_state and st.session_state.extract_btn == True:
-    st.session_state.btn_disable = True
+# if "research_papers" not in st.session_state:
+#     st.session_state["research_papers"] = set()
+
+# if "extract_btn" in st.session_state and st.session_state.extract_btn == True:
+#     st.session_state.btn_disable = True
+# else:
+#     st.session_state.btn_disable = False
+
+
+# def handleClick(files, verify, entity_types, force_rerun):
+#     if len(files) < 1:
+#         return
+
+#     pdf_load_dir, xml_cache_dir = utils.load_pdfs(files)
+
+#     if pdf_load_dir != None:
+#         xml_cache_dir = utils.pdfs_to_xmls(pdf_load_dir, xml_cache_dir)
+
+#     {
+#         paper_id: utils.xml_to_body_text(xml_path)
+#         for paper_id, xml_path in xml_cache_dir.items()
+#     }
+
+#     taskobject = TaskObject()
+
+#     ic(f"Pre-processing pdfs")
+#     text_chain = pl.pdfs_to_text(files)
+#     ic(f"Pre-processed pdfs")
+
+#     for entity_type in entity_types:
+#         entity_text_chain = text_chain.filter_(
+#             lambda id_path: id_path[0]
+#             not in list(st.session_state["entities"][entity_type].keys())
+#         )
+
+#         if force_rerun:
+#             entity_text_chain = text_chain
+#         ic("Starting extraction...")
+#         st.session_state["entities"][entity_type] = {
+#             **pl.text_to_entities(
+#                 entity_text_chain,
+#                 entity_type,
+#                 verify=verify,
+#                 temperature=LLM_TEMPERATURE,
+#             ),
+#             **st.session_state["entities"][entity_type],
+#         }
+#         ic("Extracted")
+
+#     st.session_state["research_papers"] = (
+#         py_.chain(st.session_state["entities"].values())
+#         .map_(lambda ent_dict: list(ent_dict.keys()))
+#         .flatten()
+#         .apply(set)
+#         .value()
+#     )
+
+
+if "load_btn" in st.session_state and st.session_state.load_btn == True:
+    st.session_state.disable_load_btn = True
 else:
-    st.session_state.btn_disable = False
+    st.session_state.disable_load_btn = False
 
-def handleClick(files, verify, entity_types, force_rerun):
-    if len(files) < 1:
-        return
-    
-    files = files if files else []
+if "xmls" not in st.session_state:
+    st.session_state.xmls = []
 
-    if len(files) < 1:
-        return
+if "warnings" not in st.session_state:
+    st.session_state.warnings = {}
 
-    ic(f"Pre-processing pdfs")
-    text_chain = pdfs_to_text(files)
-    ic(f"Pre-processed pdfs")
-
-    for entity_type in entity_types:
-        entity_text_chain = text_chain.filter_(
-            lambda id_path: id_path[0]
-            not in list(st.session_state["entities"][entity_type].keys())
-        )
-
-        if force_rerun:
-            entity_text_chain = text_chain
-        ic("Starting extraction...")
-        st.session_state["entities"][entity_type] = {
-            **text_to_entities(
-                entity_text_chain,
-                entity_type,
-                verify=verify,
-                temperature=LLM_TEMPERATURE,
-            ),
-            **st.session_state["entities"][entity_type],
-        }
-        ic("Extracted")
-
-    st.session_state["research_papers"] = (
-        py_.chain(st.session_state["entities"].values())
-        .map_(lambda ent_dict: list(ent_dict.keys()))
-        .flatten()
-        .apply(set)
-        .value()
-    )
-
+if "tasks" not in st.session_state:
+    st.session_state.tasks = []
 
 
 def main():
@@ -87,179 +114,106 @@ def main():
         Path(f"temp/views/{entity_type}").mkdir(exist_ok=True, parents=True)
     Path("temp/transformers/model/").mkdir(exist_ok=True, parents=True)
 
-    URL_df = pd.DataFrame([{"URL": None, "Include": False}])
-    edited_df = (
-        st.data_editor(URL_df, num_rows="dynamic", use_container_width=True)
-        .dropna()
-        .query("Include == True")
+    files = st.file_uploader(
+        "Upload research papers", accept_multiple_files=True, type="pdf"
     )
 
-    files = st.file_uploader("Mulitple uploads allowed", "pdf", True) + edited_df["URL"].to_list()
-    entity_types = st.multiselect(
-        "Entities to extract", list(EntityType), format_func=py_.human_case
-    )
-    verify = st.toggle("Verify entities", value=True)
-    force_rerun = st.checkbox("Force rerun", value=False)
-    st.button(
-        (
-            "Begin Extraction"
-            if not st.session_state.btn_disable
-            else "Extracting..."
-        ),
-        key="extract_btn",
-        disabled=st.session_state.btn_disable,
-        # on_click=handleClick,
-        # args=[files,verify,entity_types,force_rerun]
-    )
-    
-    if st.session_state.btn_disable:
-        handleClick(files, verify, entity_types, force_rerun)
-        st.rerun()
-        
-    
-    
-    CACHED_PDFS = utils.getall_pdf_path(Path("temp/pdfs"))
-    ANNOTATED_CACHED_PDFS = {}
-    for entity_type in EntityType:
-        ANNOTATED_CACHED_PDFS[entity_type] = utils.getall_pdf_path(
-            Path(f"temp/views/{entity_type}")
-        )
+    st.button("Load PDFs", key="load_btn", disabled=st.session_state.disable_load_btn)
 
-    if len(st.session_state["research_papers"]) < 1:
-        return
-    
-    with st.container(border=True):
-
-        r_tab = stx.tab_bar(
-            data=[
-                stx.TabBarItemData(i, py_.truncate(r,10), None)
-                for i, r in enumerate(st.session_state["research_papers"])
-            ],
-            default=0,
-            return_type=int,
-        )
-
-        with st.container(border=True):
-            paper_id = list(st.session_state["research_papers"])[r_tab]
-
-            e_tab = stx.tab_bar(
-                data=[
-                    stx.TabBarItemData(i, py_.human_case(e), None)
-                    for i, e in enumerate(
-                        py_.chain(st.session_state["entities"])
-                        .to_pairs()
-                        .filter_(lambda ents: paper_id in ents[1])
-                        .map_(lambda ents: ents[0])
-                        .value()
-                    )
-                ],
-                default=0,
-                return_type=int,
+    if st.session_state.disable_load_btn:
+        files = (
+            py_.chain(files)
+            .filter_(
+                lambda pdf: pdf.file_id
+                not in [xml.paper_id for xml in st.session_state.xmls]
             )
+            .value()
+        )
 
-            entity_type = list(
-                py_.chain(st.session_state["entities"])
-                .to_pairs()
-                .filter_(lambda ents: paper_id in ents[1])
-                .map_(lambda ents: ents[0])
-                .value()
-            )[e_tab]
+        if len(files) < 1:
+            st.session_state.warnings[ERROR_CODES.E01] = "PDFs are already loaded!"
+            st.rerun()
 
-            if paper_id not in ANNOTATED_CACHED_PDFS[entity_type]:
-                annotate_pdf(
-                    CACHED_PDFS[paper_id],
-                    entity_type,
-                    st.session_state["entities"][entity_type][paper_id],
-                )
+        new_pdf_dir = utils.upload_pdfs(files)
+        if new_pdf_dir == None:
+            st.rerun()
+        xml_files = utils.pdfs_to_xmls(new_pdf_dir)
+        if xml_files == None:
+            st.rerun()
 
-            if len(st.session_state["entities"][entity_type][paper_id]) < 1:
-                st.write(f"No {entity_type}s found in paper {paper_id}.")
-            else:
-                st.write(f"{py_.human_case(entity_type)} found in paper {paper_id}.")
+        for xml_id, xml_path in xml_files.items():
+            title = ""
+            with open(xml_path, "r") as file:
+                title = py_.human_case(bs4(file, features="lxml").title.get_text())
+            xml = Paper(xml_path, title, xml_id)
+            st.session_state.xmls.append(xml)
 
-                st.table(
+        st.rerun()
+
+    if len(st.session_state.xmls) > 0 and not st.session_state.disable_load_btn:
+        if ERROR_CODES.E01 in st.session_state.warnings:
+            st.warning(st.session_state.warnings[ERROR_CODES.E01])
+            del st.session_state.warnings[ERROR_CODES.E01]
+        else:
+            st.success("Succesfully loaded!", icon="✅")
+
+    for xml in st.session_state.xmls:
+        expander = st.expander(py_.human_case(xml.title))
+        expander.write(xml.paper_id)
+        include = expander.checkbox("Include", value=True, key=f"chkbox-{xml.paper_id}")
+        
+        if not include:
+            continue
+        
+        tasks = expander.multiselect(
+            "Entities to extract",
+            list(EntityType),
+            EntityType.DATASET,
+            py_.human_case,
+            f"mltislct-{xml.paper_id}",
+            "More extractable entities can be added",
+        )
+        task_df = expander.data_editor(
+            pd.DataFrame(
+                [
                     {
-                        f"{py_.human_case(entity_type)}": st.session_state["entities"][
-                            entity_type
-                        ][paper_id]
+                        "task": py_.human_case(entity_type),
+                        "verify": False,
                     }
+                    for entity_type in tasks
+                ]
+            ),
+            column_config={
+                "Extractable Entities": st.column_config.TextColumn(
+                    disabled=True, width="large"
+                ),
+                "Verify Entities": st.column_config.CheckboxColumn(default=True),
+            },
+            hide_index=True,
+            key=f"data-ed-{xml.paper_id}",
+            use_container_width=True,
+        )
+        
+
+        text = utils.xml_to_body_text(xml.path)
+        chunks = pl.chunker(text)
+
+        for row in task_df.T:
+            st.session_state.tasks.append(
+                TaskObject(
+                    paper_id=xml.paper_id,
+                    entity_type=task_df["task"][row],
+                    verify=task_df["verify"][row],
+                    xml_path=xml.path,
+                    chunks=chunks,
+                    query_embeds=utils.query_embedder(task_df["task"][row].lower()),
+                    temperature=LLM_TEMPERATURE,
                 )
+            )
+    
 
-                pdf_viewer(
-                    Path("temp/views")
-                    .joinpath(entity_type, paper_id + ".pdf"),
-                    height=500,
-                )
-
-            # st.write(st.session_state["entities"][list(EntityType)[e_tab]][list(st.session_state["research_papers"])[r_tab]])
-
-    # research_paper_tabs = st.tabs(st.session_state["research_papers"])
-    # for r_tab, paper_id in zip(
-    #     research_paper_tabs, st.session_state["research_papers"]
-    # ):
-    #     with r_tab:
-    #         # entity_tabs = st.tabs(list(map(py_.human_case, list(EntityType))))
-
-    #         for entity_type in EntityType:
-    #                 # with e_tab:
-
-    #             st.session_state["current_view"] = f"{paper_id}-{entity_type}"
-
-    #             entities = st.session_state["entities"][entity_type]
-    #             if len(entities) < 1:
-    #                 continue
-
-    # if paper_id not in ANNOTATED_CACHED_PDFS[entity_type]:
-    #     annotate_pdf(
-    #         CACHED_PDFS[paper_id],
-    #         entity_type,
-    #         st.session_state["entities"][entity_type][paper_id],
-    #     )
-
-    # if len(st.session_state["entities"][entity_type][paper_id]) < 1:
-    #     st.write(f"No {entity_type}s found in paper {paper_id}.")
-    #     continue
-
-    # st.write(
-    #     f"{py_.human_case(entity_type)} found in paper {paper_id}."
-    # )
-
-    # st.table(
-    #     {
-    #         f"{py_.human_case(entity_type)}": st.session_state[
-    #             "entities"
-    #         ][entity_type][paper_id]
-    #     }
-    # )
-
-    #             pdf_viewer(
-    #                 Path("temp/views")
-    #                 .joinpath(entity_type, paper_id)
-    #                 .with_suffix(".pdf"),
-    #                 width=700,
-    #                 height=500
-    #             )
-
-    # remove the temp folders
-    # shutil.rmtree('temp')
-
-
+    # shutil.rmtree("temp")
+    
+    
 if __name__ == "__main__":
     main()
-
-
-# inits = {}
-
-# # initializing grobid
-# grobid_version = os.environ.get('GROBID_VERSION')
-# if grobid_version == None:
-#     raise Exception('No grobid version found in environment.')
-# inits['grobid'] = grobid_init(grobid_version)
-
-# if inits['grobid'] == True:
-#     ic('GROBID initialized successfully!')
-# else:
-#     ic('Something went wrong initializing GROBID.')
-
-
-# TODO: Break the paper into multiple sub-papers and run the task parallely lastly join the output.
