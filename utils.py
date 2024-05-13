@@ -9,6 +9,7 @@ import re
 from urllib import request, parse
 import google.ai.generativelanguage as glm
 from rsa import verify
+import torch
 from processing import embedder, sub_ci
 from google_oauth import generative_service_client
 from enums import EntityType
@@ -48,7 +49,7 @@ def upload_pdfs(pdfs, new_cache_dir=None):
         
     try:
         for pdf in pdfs:
-            with open(new_cache_dir.joinpath(pdf.file_id).with_suffix(".pdf"), "wb") as f:
+            with open(new_cache_dir.joinpath(hashlib.sha256(pdf.getbuffer()).hexdigest()).with_suffix(".pdf"), "wb") as f:
                 f.write(pdf.getbuffer())
         return new_cache_dir
     except Exception as e:
@@ -182,6 +183,7 @@ def pdfs_to_xmls(pdf_load_dir, xmls_path={}):
     except Exception as e:
         ic(f"Exception {e} occued during conversion of pdfs to xmls.")
         shutil.rmtree(xml_dir)
+        shutil.rmtree(pdf_load_dir)
         return None
 
     # grobid_version = os.environ.get('GROBID_VERSION')
@@ -403,7 +405,11 @@ queries = {
     ],
 }
 
-query_embedder = lambda task_type: prepare_embeddings(queries[task_type])
+import streamlit as st
+
+@st.cache_data(persist="disk")
+def query_embedder(task_type: EntityType):
+    return prepare_embeddings(queries[task_type])
 
 
 def verify_counter():
@@ -490,19 +496,19 @@ verify_entity = verify_counter()
 
 
 def extract_entities(
-    chunks,
-    q_embeds,
-    entity_type,
-    keywords=None,
-    entities=set(),
+    chunks: list[str],
+    q_embeds: list[torch.Tensor] | torch.Tensor,
+    entity_type: EntityType,
+    keywords: set[str] | None=None,
+    entities: set[str] = set(),
     verify=True,
-    temperature=None,
+    temperature: float | None = None,
 ):
-    keywords = keywords or regex_keywords_phrases[entity_type]
+    keywords = keywords or set(regex_keywords_phrases[entity_type])
     corpus = prepare_corpus(chunks, keywords=keywords, regex=len(entities) < 1)
     corpus_embeds = prepare_embeddings(corpus)
 
-    queries_hits = util.semantic_search(q_embeds, corpus_embeds, top_k=20)
+    queries_hits = util.semantic_search(q_embeds, corpus_embeds, top_k=20) # type: ignore
     docs = resolve_hit_documents(corpus, queries_hits)
     grounding_passages = prepare_grounding_passages(docs)
 
@@ -527,10 +533,10 @@ def extract_entities(
         print(attempted_answer)
         return
 
-    for text_in_brackets in re.findall(r"\((.*?)\)", attempted_answer):
+    for text_in_brackets in re.findall(pattern=r"\((.*?)\)", string=attempted_answer): # type: ignore
         if not re.search(r"\( *(?:[\w& \.,*-]+\d{4};?)+ *\)", text_in_brackets):
             continue
-        attempted_answer = re.sub(rf"\({text_in_brackets}\)", "", attempted_answer)
+        attempted_answer = re.sub(rf"\({text_in_brackets}\)", "", attempted_answer) # type: ignore
 
     attempted_answer = sub_ci(r" \w+ et\.? al\.", "")(attempted_answer)
     temp_entities = (

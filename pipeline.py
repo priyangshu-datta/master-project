@@ -34,7 +34,7 @@ text_to_entities = lambda text_chain, entity_type, verify=True, temperature=None
 ).tap(lambda _: ic("Text chunked")).map_(
     lambda id_chunks: (
         id_chunks[0],
-        extract_entities(id_chunks[1], query_embedder(entity_type), entity_type, verify=verify, temperature=temperature),
+        extract_entities(id_chunks[1], query_embedder(entity_type), entity_type, verify=verify, temperature=temperature), # type: ignore
     )
 ).tap(lambda _: ic("extracted and verified")).map_(
     lambda id_entities: (id_entities[0], clean_entities(id_entities[1]))

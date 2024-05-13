@@ -10,3 +10,4 @@ logs
 .devcontainer
 venv
 scratch.*
+cache
