@@ -4,10 +4,11 @@ from enums import EntityType
 from utils import query_embedder, load_pdfs, pdfs_to_xmls, xml_to_body_text, extract_entities
 from icecream import ic
 
-chunker = py_.flow(
-    sentence_splitter,
-    lambda x: group_sentences(x, 200, 2),
-)
+chunker = lambda text, max_tokens=200, overlap = 2: py_.chain(text).apply(
+    sentence_splitter
+).apply(
+    lambda x: group_sentences(x, max_tokens, overlap),
+).value()
 
 clean_entities = (
     lambda entities: py_.chain(entities)
