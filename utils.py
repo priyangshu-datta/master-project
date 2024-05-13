@@ -1,3 +1,4 @@
+from collections import namedtuple
 from pathlib import Path
 import shutil
 import time
@@ -41,14 +42,20 @@ def create_random_dir(parent="."):
     return Path(new_cache_dir)
 
 
-def upload_pdfs(files, new_cache_dir=None):
+def upload_pdfs(pdfs, new_cache_dir=None):
     if new_cache_dir == None:
-        create_random_dir("temp/pdfs/")
-    for file in files:
-        file_id = create_file_id(file.name.replace(".pdf", ""))
-        with open(str(new_cache_dir.joinpath(file_id)) + ".pdf", "wb") as f:
-            f.write(file.getbuffer())
-    return new_cache_dir
+        new_cache_dir = create_random_dir("temp/pdfs/")
+        
+    try:
+        for pdf in pdfs:
+            with open(new_cache_dir.joinpath(pdf.file_id).with_suffix(".pdf"), "wb") as f:
+                f.write(pdf.getbuffer())
+        return new_cache_dir
+    except Exception as e:
+        ic(f"Exception: {e} occured during uploading PDF {pdf.name}. All the PDFs queued for upload will be removed.")
+        shutil.rmtree(new_cache_dir)
+        return None
+        
 
 
 def download_pdfs(urls, new_cache_dir=None):
@@ -91,8 +98,11 @@ def getall_pdf_path(pdf_dir):
 
 
 def load_pdfs(papers):
+    
+    PDF_path = namedtuple('PDF_path', ['pdf_load_dir', 'xml_cache_dir'])
+    
     if len(papers) < 1:
-        return None, None
+        return PDF_path(None, None)
 
     pdf_dir = Path("temp/pdfs")
     PDF_URL_MAP = {}
@@ -109,11 +119,11 @@ def load_pdfs(papers):
         for x in Path("temp/xmls").glob("**/*.grobid.tei.xml")
     }
 
-    to_load = set(PDF_URL_MAP.keys())
+    to_load: set[str] = set(PDF_URL_MAP.keys())
     to_process = to_load.difference(CACHED_XMLS.keys())
 
     if len(to_process) < 1:
-        return None, {k: CACHED_XMLS[k] for k in to_load}
+        return PDF_path(None, {k: CACHED_XMLS[k] for k in to_load})
 
     CACHED_PDFS = getall_pdf_path(pdf_dir)
 
@@ -141,40 +151,45 @@ def load_pdfs(papers):
         new_cache_dir = upload_pdfs(to_upload, new_cache_dir)
 
     remove_empty_dirs(pdf_dir)
-    return new_cache_dir, py_.pick_by(CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys())
+    return PDF_path(new_cache_dir, py_.pick_by(CACHED_XMLS, lambda _, k: k in PDF_URL_MAP.keys()))
 
 
-def pdfs_to_xmls(pdfs_folder_name, CACHED_XMLS={}):
-    if pdfs_folder_name == None:
-        # ic(f'Already cached for files: {" ".join(CACHED_XMLS)}')
-        return CACHED_XMLS
+def pdfs_to_xmls(pdf_load_dir, xmls_path={}):
+    if pdf_load_dir == None:
+        return xmls_path
 
-    xmls_folder_name = create_random_dir("temp/xmls/")
+    xml_dir = create_random_dir("temp/xmls/")
 
-    pdf_files = [f for f in Path(pdfs_folder_name).iterdir() if not f.is_dir()]
+    pdf_files = [f for f in Path(pdf_load_dir).iterdir() if not f.is_dir()]
 
-    client = GrobidClient(config_path="./config.json")
-    client.process(
-        "processFulltextDocument",
-        pdfs_folder_name,
-        output=xmls_folder_name,
-        n=len(pdf_files),
-        consolidate_header=False,
-    )
+    try:
+        client = GrobidClient(config_path="./config.json")
+        client.process(
+            "processFulltextDocument",
+            pdf_load_dir,
+            output=xml_dir,
+            n=len(pdf_files),
+            consolidate_header=False,
+        )
+        
+        return {
+            **xmls_path,
+            **{
+                v.name.replace(".grobid.tei.xml", ""): v
+                for v in Path(xml_dir).glob("*.grobid.tei.xml")
+            },
+        }
+    except Exception as e:
+        ic(f"Exception {e} occued during conversion of pdfs to xmls.")
+        shutil.rmtree(xml_dir)
+        return None
 
-    return {
-        **CACHED_XMLS,
-        **{
-            v.name.replace(".grobid.tei.xml", ""): v
-            for v in Path(xmls_folder_name).glob("*.grobid.tei.xml")
-        },
-    }
     # grobid_version = os.environ.get('GROBID_VERSION')
 
     # xmls_folder_name = f"./temp/xmls/{gen_datetime_name()}"
 
     # try:
-    #     os.system(f'java -Xmx4G -jar grobid-{grobid_version}/grobid-core/build/libs/grobid-core-{grobid_version}-onejar.jar -gH grobid-{grobid_version}/grobid-home -dIn {pdfs_folder_name} -dOut {xmls_folder_name} -exe processFullText')
+    #     os.system(f'java -Xmx4G -jar grobid-{grobid_version}/grobid-core/build/libs/grobid-core-{grobid_version}-onejar.jar -gH grobid-{grobid_version}/grobid-home -dIn {pdf_load_dir} -dOut {xmls_folder_name} -exe processFullText')
     #     os.system('clear')
     #     return {
     #         **CACHED_XMLS,
