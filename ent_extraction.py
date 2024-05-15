@@ -1,16 +1,19 @@
 import re
-from torch import Tensor
-import pydash as py_
-from enums import TaskType
 import time
-from duckduckgo_search import DDGS, exceptions
-import google.ai.generativelanguage as glm
-from CONSTANTS import LLM_TEMPERATURE
-from texts import embedder
-from goauth import generative_service_client
-from texts import sub_ci
-from icecream import ic
 
+import google.ai.generativelanguage as glm
+import pydash as py_
+from duckduckgo_search import DDGS, exceptions
+from icecream import ic
+from sentence_transformers import util
+from torch import Tensor
+
+from CONSTANTS import LLM_TEMPERATURE
+from enums import TaskType
+from goauth import generative_service_client
+from texts import embedder, sub_ci
+from concurrent.futures import ThreadPoolExecutor
+from itertools import repeat
 
 prepare_grounding_passages = lambda docs: glm.GroundingPassages(
     passages=py_.chain(docs)
@@ -208,7 +211,7 @@ queries = {
 def verify_counter():
     last_time = time.time()
 
-    def verify_entity(entity, entity_type, temperature=LLM_TEMPERATURE):
+    def verify_entity(entity: str, entity_type: TaskType, temperature=LLM_TEMPERATURE):
 
         nonlocal last_time
 
@@ -235,26 +238,34 @@ def verify_counter():
 
         while True:
             try:
-                while time.time() - last_time < 0.07:
-                    time.sleep(0.05)
-                    continue
+                # while time.time() - last_time < 0.07:
+                #     time.sleep(0.05)
+                #     continue
+
+                # ic(
+                #     DDGS().text(
+                #         query,
+                #         max_results=5,
+                #     )
+                # )
 
                 docs = (
                     py_.chain(
                         DDGS().text(
                             query,
                             max_results=5,
-                            backend="html",
                         )
                     )
+                    .tap(ic)
                     .map_(lambda x: f"{x['title']}: {x['body']}")
                     .value()
                 )
+                # return (entity, True)
 
-                last_time = time.time()
+                # last_time = time.time()
 
                 if len(docs) < 1:
-                    return False
+                    return (entity, False)
                 break
             except exceptions.RatelimitException as e:
                 ic("Error: DDGS rate limit exception!", e)
@@ -262,7 +273,9 @@ def verify_counter():
                 sleep_interval *= 1.2
                 continue
             except:
-                return
+                return (entity, False)
+
+        ic("here and there")
 
         grounding_passages = prepare_grounding_passages(docs)
 
@@ -277,11 +290,13 @@ def verify_counter():
 
         try:
             return (
-                False if attempted_answer == None else "y" in attempted_answer.lower()
+                entity,
+                False if attempted_answer == None else "y" in attempted_answer.lower(),
             )
+
         except:
             # ic(attempted_answer)
-            return False
+            return entity, False
 
     return verify_entity
 
@@ -317,6 +332,7 @@ def extract_entities(
         ),
     )
 
+    ic("Asking LLM")
     response = generate_answer(grounding_passages, query_content, temperature)
     attempted_answer = py_.attempt(
         lambda _: response.answer.content.parts[0].text, None
@@ -341,18 +357,31 @@ def extract_entities(
 
     if verify:
         # using threads will not be helpful due to RateLimitException
-        temp_entities = set(
-            py_.objects.get(
-                py_.objects.invert_by(
-                    {
-                        entity: verify_entity(entity, entity_type)
-                        for entity in temp_entities
-                    }
-                ),
-                True,
+        ic("Verifying")
+        with ThreadPoolExecutor() as executor:
+            results = executor.map(
+                verify_entity, temp_entities, repeat(entity_type), timeout=30
             )
-            or []
-        )
+
+            temp_entities = (
+                py_.chain(results)
+                .filter_(lambda result: result[1])
+                .map_(lambda result: result[0])
+                .value()
+            )
+
+        # temp_entities = set(
+        #     py_.objects.get(
+        #         py_.objects.invert_by(
+        #             {
+        #                 entity: verify_entity(entity, entity_type)
+        #                 for entity in temp_entities
+        #             }
+        #         ),
+        #         True,
+        #     )
+        #     or []
+        # )
 
     temp_entities = entities.union(temp_entities)
 
@@ -370,7 +399,7 @@ def extract_entities(
             entity_keywords = entity_keywords.union(
                 {re.sub(rf"\({_}\)", "", dataset).strip() for _ in m}
             )
-
+    ic("Recurring")
     return extract_entities(
         chunks, q_embeds, entity_type, entity_keywords, entities, verify
     )
