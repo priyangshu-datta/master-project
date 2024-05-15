@@ -107,13 +107,15 @@ def main():
             "Upload research papers",
             accept_multiple_files=True,
             type="pdf",
-            disabled=st.session_state.disable_load_btn,
+            disabled=st.session_state.disable_load_btn
+            or st.session_state.disable_extract_btn,
         )
         if pdfs != None and len(pdfs) > 0:
             st.button(
                 f"Upload PDF{'s' if len(pdfs) > 1 else ''}",
                 key="upload_btn",
-                disabled=st.session_state.disable_load_btn,
+                disabled=st.session_state.disable_load_btn
+                or st.session_state.disable_extract_btn,
             )
 
     with download_method:
@@ -128,13 +130,15 @@ def main():
                 )
             },
             use_container_width=True,
-            disabled=st.session_state.disable_load_btn,
+            disabled=st.session_state.disable_load_btn
+            or st.session_state.disable_extract_btn,
         ).dropna()
         if len(edited_df) > 0:
             st.button(
                 f"Download PDF{'s' if len(edited_df) > 1 else ''}",
                 key="download_btn",
-                disabled=st.session_state.disable_load_btn,
+                disabled=st.session_state.disable_load_btn
+                or st.session_state.disable_extract_btn,
             )
 
     if st.session_state.disable_load_btn:
@@ -161,20 +165,14 @@ def main():
         task_tab, result_tab = expander.tabs(["Tasks", "Results"])
 
         with task_tab:
-
-            task_types = task_tab.multiselect(
-                "Entities to extract",
-                list(TaskType),
-                TaskType.DATASET,
-                py_.human_case,
-                f"mltislct-{paper.id}",
-                "More extractable entities can be added",
-            )
-
             task_df = pd.DataFrame(
                 [
-                    {"task_type": py_.human_case(task_type), "verify": False}
-                    for task_type in task_types
+                    {
+                        "task_type": py_.human_case(task_type),
+                        "verify": False,
+                        "include": False,
+                    }
+                    for task_type in TaskType
                 ]
             )
 
@@ -182,18 +180,30 @@ def main():
                 task_df,
                 column_config={
                     "task_type": st.column_config.TextColumn(
-                        label="Extractable Entities", disabled=True, width="large"
+                        label="Extractable Entities",
+                        disabled=True,
+                        width="large",
+                        help="Available Entity Types for extraction",
                     ),
                     "verify": st.column_config.CheckboxColumn(
-                        label="Verify Entities", default=True
+                        label="Verify Entities",
+                        default=True,
+                        help="Should be verified with internet?",
+                    ),
+                    "include": st.column_config.CheckboxColumn(
+                        label="Include",
+                        default=False,
+                        help="Should be included in the next extraction?",
                     ),
                 },
                 hide_index=True,
                 key=f"data-ed-{paper.id}",
                 use_container_width=True,
-            )
+                disabled=st.session_state.disable_extract_btn,
+            ).query("include==True")
 
-            for row in range(len(edited_task_df)):
+
+            for row in edited_task_df.T:
                 ID = uuid.uuid4().hex
 
                 st.session_state.pending_tasks[ID] = Task(
@@ -234,11 +244,21 @@ def main():
                         "Download PDF with Annotations",
                         data=annotate_pdf(task.paper.pdf_path, task.extracted_ents),
                         file_name=f"{py_.title_case(task.paper.title).replace(' ','_')}_{task.type}_extracted.pdf",
+                        key=task.id,
                     )
 
     if len(st.session_state.pending_tasks) > 0:
+        entity_type = "Entitie"
+        for task_type in TaskType:
+            if all(
+                [
+                    task.type == task_type
+                    for task in st.session_state.pending_tasks.values()
+                ]
+            ):
+                entity_type = py_.human_case(task_type)
         st.button(
-            "Extract Entities",
+            f"Extract {entity_type}s",
             key="extract_btn",
             disabled=st.session_state.disable_extract_btn,
         )
