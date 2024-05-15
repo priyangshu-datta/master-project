@@ -1,0 +1,13 @@
+grobid-*
+temp
+.devcontainer
+__pycache__
+.env
+service_account_key.json
+logs
+.vscode
+*.zip
+.devcontainer
+venv
+scratch.*
+cache
