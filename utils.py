@@ -1,6 +1,7 @@
 from collections import namedtuple
 from pathlib import Path
 import shutil
+from tempfile import TemporaryDirectory
 import time
 import pydash as py_
 import os
@@ -10,6 +11,7 @@ from urllib import request, parse
 import google.ai.generativelanguage as glm
 from rsa import verify
 import torch
+from main import chcksum
 from processing import embedder, sub_ci
 from google_oauth import generative_service_client
 from enums import EntityType
@@ -61,12 +63,18 @@ def upload_pdfs(pdfs, new_cache_dir=None):
 
 def download_pdfs(urls, new_cache_dir=None):
     if new_cache_dir == None:
-        create_random_dir("temp/pdfs/")
+        new_cache_dir = create_random_dir("temp/pdfs/")
     to_load = {
         parse.urlparse(url).path.split("/")[-1].replace(".pdf", ""): url for url in urls
     }
-    for id, url in to_load.items():
-        request.urlretrieve(url, f"{new_cache_dir}/{id}.pdf")
+    with TemporaryDirectory() as tmpdir:
+        for id, url in to_load.items():
+            request.urlretrieve(url, f"{tmpdir}/{id}.pdf")
+        
+        for pdf in Path(tmpdir).glob("*.pdf"):
+            with open(pdf, "rb") as file:
+                f_id = chcksum(file)
+            shutil.move(pdf.with_name(f_id), new_cache_dir)
 
     return new_cache_dir
 
