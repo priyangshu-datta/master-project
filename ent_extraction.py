@@ -256,7 +256,6 @@ def verify_counter():
                             max_results=5,
                         )
                     )
-                    .tap(ic)
                     .map_(lambda x: f"{x['title']}: {x['body']}")
                     .value()
                 )
@@ -274,9 +273,6 @@ def verify_counter():
                 continue
             except:
                 return (entity, False)
-
-        ic("here and there")
-
         grounding_passages = prepare_grounding_passages(docs)
 
         query_content = prepare_query_content(f"Is {entity} a data set? (y/n)")
@@ -360,7 +356,7 @@ def extract_entities(
         ic("Verifying")
         with ThreadPoolExecutor() as executor:
             results = executor.map(
-                verify_entity, temp_entities, repeat(entity_type), timeout=30
+                verify_entity, temp_entities, repeat(entity_type)
             )
 
             temp_entities = (
