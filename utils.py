@@ -17,6 +17,7 @@ from ent_extraction import extract_entities, prepare_embeddings, queries
 from models import Downloaded_PDF, Load_XML, Paper, Task, Upload_PDF
 from icecream import ic
 from texts import chunker, xml_to_body_text
+from pathlib import Path
 
 T = typing.TypeVar("T")
 
@@ -58,7 +59,14 @@ def load_xml(xml: Load_XML):
         else:
             title = py_.human_case(title.get_text())
 
-    return Paper(id=xml.id, title=title, xml_path=xml.path)
+    return Paper(
+        id=xml.id,
+        title=title,
+        xml_path=xml.path,
+        pdf_path={path.stem: path for path in Path("temp/pdfs").glob("**/*.pdf")}[
+            xml.id
+        ],
+    )
 
 
 gen_datetime_name = (
@@ -146,8 +154,8 @@ def task_wrapper_extract_entities(task: Task):
         verify=task.verify,
         chunks=chunker(xml_to_body_text(task.paper.xml_path)),
         temperature=LLM_TEMPERATURE,
-        entity_type=task.task_type,  # type: ignore
-        q_embeds=query_embedder(task.task_type),  # type: ignore
+        entity_type=task.type,  # type: ignore
+        q_embeds=query_embedder(task.type),  # type: ignore
     )
     task.time_elapsed = time.perf_counter() - start
     task.pending = False

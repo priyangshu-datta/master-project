@@ -11,7 +11,7 @@ st.set_page_config(
 
 import time
 from pathlib import Path
-
+import uuid
 import pandas as pd
 import pydash as py_
 from enums import TaskType
@@ -28,6 +28,7 @@ from utils import (
     task_wrapper_extract_entities,
     upload_convert,
 )
+from annotate_pdf import annotate_pdf
 
 
 def load_pdf_uploads(pdfs: list[UploadedFile]):
@@ -161,11 +162,6 @@ def main():
 
         with task_tab:
 
-            include = task_tab.checkbox("Include", value=True, key=f"chkbox-{paper.id}")
-
-            if not include:
-                exit(task_tab)
-
             task_types = task_tab.multiselect(
                 "Entities to extract",
                 list(TaskType),
@@ -175,37 +171,10 @@ def main():
                 "More extractable entities can be added",
             )
 
-            potential_task_ids = {
-                task_type: chcksum(f"{paper.id}-{task_type}")
-                for task_type in task_types
-            }
-
-            status_colors = ["🟡", "🔴", "🟢"]
-
-            status = {}
-            att = {}
-
-            for task_id in potential_task_ids.values():
-                if (
-                    task_id in st.session_state.tasks
-                    and not (task := st.session_state.tasks[task_id]).pending
-                ):
-                    status[task_id] = status_colors[2]
-                    att[task_id] = task.time_elapsed
-                    continue
-
-                status[task_id] = status_colors[0]
-                att[task_id] = None
-
             task_df = pd.DataFrame(
                 [
-                    {
-                        "task_type": py_.human_case(task_type),
-                        "verify": False,
-                        "status": status[task_id],
-                        "att": att[task_id],
-                    }
-                    for task_type, task_id in potential_task_ids.items()
+                    {"task_type": py_.human_case(task_type), "verify": False}
+                    for task_type in task_types
                 ]
             )
 
@@ -218,12 +187,6 @@ def main():
                     "verify": st.column_config.CheckboxColumn(
                         label="Verify Entities", default=True
                     ),
-                    "status": st.column_config.TextColumn(
-                        label="Status", disabled=True
-                    ),
-                    "att": st.column_config.TextColumn(
-                        label="ATT", disabled=True, help="Actual Time Taken"
-                    ),
                 },
                 hide_index=True,
                 key=f"data-ed-{paper.id}",
@@ -231,36 +194,49 @@ def main():
             )
 
             for row in range(len(edited_task_df)):
-                ID = potential_task_ids[edited_task_df["task_type"][row].lower()]
+                ID = uuid.uuid4().hex
 
-                if (
-                    ID in st.session_state.tasks
-                    and not st.session_state.tasks[ID].pending
-                ):
-                    continue
-
-                st.session_state.tasks[ID] = Task(
+                st.session_state.pending_tasks[ID] = Task(
                     paper=paper,
                     id=ID,
-                    task_type=edited_task_df["task_type"][row].lower(),
+                    type=edited_task_df["task_type"][row].lower(),
                     verify=edited_task_df["verify"][row],
                 )
 
         with result_tab:
-            st.write()
+            done_tasks: dict[str, Task] = st.session_state.done_tasks
 
-    if (
-        py_.chain(st.session_state.tasks.values())
-        .filter_(lambda task: task.pending)
-        .apply(len)
-        .value()
-        > 0
-    ):
-        ic(
-            py_.chain(st.session_state.tasks.values())
-            .filter_(lambda task: task.pending)
-            .value()
-        )
+            for task in (
+                py_.chain(done_tasks)
+                .filter_(lambda task: task.paper.id == paper.id)
+                .value()
+            ):
+                with result_tab.container(border=True):
+                    st.subheader(
+                        f"{py_.human_case(task.type)} Mention Extraction: {task.id}",
+                        divider=True,
+                    )
+                    st.dataframe(
+                        pd.DataFrame(
+                            list(task.extracted_ents),
+                            columns=[f"Extracted {task.type}s"],
+                        ),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+                    st.write(
+                        "**Actual Time Taken:** {att:.2f}s".format(
+                            att=task.time_elapsed
+                        )
+                    )
+
+                    st.download_button(
+                        "Download PDF with Annotations",
+                        data=annotate_pdf(task.paper.pdf_path, task.extracted_ents),
+                        file_name=f"{py_.title_case(task.paper.title).replace(' ','_')}_{task.type}_extracted.pdf",
+                    )
+
+    if len(st.session_state.pending_tasks) > 0:
         st.button(
             "Extract Entities",
             key="extract_btn",
@@ -268,13 +244,13 @@ def main():
         )
 
     if st.session_state.disable_extract_btn:
-        tasks: list[Task] = list(st.session_state.tasks.values())
+        tasks: list[Task] = list(st.session_state.pending_tasks.values())
         updated_tasks, exec_time = forker(
             [task for task in tasks if task.pending], task_wrapper_extract_entities
         )
 
-        st.session_state.tasks = {
-            **st.session_state.tasks,
+        st.session_state.done_tasks = {
+            **st.session_state.done_tasks,
             **{ut.id: ut for ut in updated_tasks},
         }
 
@@ -311,16 +287,11 @@ if __name__ == "__main__":
     if "errors" not in st.session_state:
         st.session_state.errors = []
 
-    if "tasks" not in st.session_state:
-        ic("here")
-        st.session_state.tasks = {}
-    else:
-        st.session_state.tasks = (
-            py_.chain(st.session_state.tasks.items())
-            .filter_(lambda task: task[1].pending == False)
-            .from_pairs()
-            .value()
-        )
+    # if "pending_tasks" not in st.session_state:
+    st.session_state.pending_tasks = {}
+
+    if "done_tasks" not in st.session_state:
+        st.session_state.done_tasks = {}
 
     if "exec_time" not in st.session_state:
         st.session_state.exec_time = None
