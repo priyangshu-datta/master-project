@@ -3,12 +3,17 @@ import pymupdf as pypdf
 import random
 from pathlib import Path
 from icecream import ic
+from enums import TaskType
 
 
-def annotate_pdf(pdf_path, entity_type, entities):
+def annotate_pdf(pdf_path: Path, entities: list[str]):
     doc = pypdf.open(pdf_path)
     stroke_color = {
-        entity: (random.random(), random.random(), 0) # research papers are filled with blues already
+        entity: (
+            random.random(),
+            random.random(),
+            0,
+        )  # research papers are filled with blues already
         for entity in entities
     }
     for pi in range(doc.page_count):
@@ -24,5 +29,9 @@ def annotate_pdf(pdf_path, entity_type, entities):
                 annot.set_opacity(0.5)
                 annot.update()
 
-    doc.save(Path(f"temp/views/{entity_type}/").joinpath(pdf_path.name))
+    # doc.save(Path(f"temp/views/{task_type}/").joinpath(pdf_path.name))
+    annot_pdf = doc.tobytes()
+
     doc.close()
+
+    return annot_pdf
