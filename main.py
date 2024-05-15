@@ -1,6 +1,3 @@
-#
-
-import threading
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,6 +21,8 @@ from data_classes import Paper, TaskObject
 from bs4 import BeautifulSoup as bs4
 import time
 from error_codes import ERROR_CODES
+
+from multiprocessing import Pool
 
 
 LLM_TEMPERATURE = 0.06
@@ -62,6 +61,9 @@ else:
         .from_pairs()
         .value()
     )
+    
+if "exec_time" not in st.session_state:
+    st.session_state.exec_time = 0.0
 
 
 def xml_loader(xml_files):
@@ -78,14 +80,9 @@ def xml_loader(xml_files):
     return xmls
 
 
-def safe_thread(function, args):
-    t = threading.Thread(target=function, args=args)
-    t.start()
-    t.join()
-
 
 def task_wrapper_extract_entities(task: TaskObject):
-    begin = time.time()
+    start = time.perf_counter()
     task.extracted_ents = utils.extract_entities(
         verify=task.verify,
         chunks=task.chunks,
@@ -93,14 +90,22 @@ def task_wrapper_extract_entities(task: TaskObject):
         entity_type=task.entity_type.lower(),  # type: ignore
         q_embeds=task.query_embeds,  # type: ignore
     )
-    end = time.time()
+    task.time_elapsed = time.perf_counter() - start
     task.pending = False
-    task.time_elapsed = end - begin
+    return task
 
 
 def forker(tasks: list[TaskObject], function):
-    for task in tasks:
-        safe_thread(function, [task])
+    start = time.perf_counter()
+    
+    with Pool() as pool:
+        results = pool.imap_unordered(function, tasks)
+        
+        for result in results:
+            st.session_state.tasks[result.task_id] = result
+    
+    st.session_state.exec_time = time.perf_counter() - start
+
 
 
 def chcksum(buffer):
@@ -291,6 +296,7 @@ def main():
     ):
         st.toast("Extracted Successfully", icon="✅")
 
+    st.write(f"Took {st.session_state.exec_time}s.")
 
 if __name__ == "__main__":
     Path("temp/pdfs/").mkdir(exist_ok=True, parents=True)
