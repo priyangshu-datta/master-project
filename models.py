@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import NamedTuple
+
 import attrs
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
@@ -34,7 +35,6 @@ class Task:
     paper: Paper
     task_type: TaskType
     verify: bool
-    chunks: list[str] = attrs.field(repr=False)
     time_elapsed: float = attrs.field(on_setattr=attrs.setters.NO_OP, default=None)
     extracted_ents: set[str] = attrs.field(on_setattr=attrs.setters.NO_OP, factory=set)
     pending: bool = attrs.field(on_setattr=attrs.setters.NO_OP, default=True)

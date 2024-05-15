@@ -1,6 +1,6 @@
 from enum import auto, StrEnum
 
-class EntityType(StrEnum):
+class TaskType(StrEnum):
     DATASET = auto()
     BASELINE = auto()
 
