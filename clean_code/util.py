@@ -1,15 +1,22 @@
 import hashlib
-from io import BufferedReader
-from pathlib import Path
 import shutil
+import time
+import typing
+from io import BufferedReader
+from multiprocessing import Pool
+from pathlib import Path
 from tempfile import TemporaryDirectory
-from time import time
-from typing_extensions import Buffer
-from urllib import parse, request
+from urllib import request
+
 import pydash as py_
 from bs4 import BeautifulSoup as bs4
-from models import Downloaded_PDF, Load_XML, Upload_PDF, Paper
+from CONSTANTS import LLM_TEMPERATURE
+from ent_extraction import extract_entities
 from grobid_client.grobid_client import GrobidClient
+from main import query_embedder
+from models import Downloaded_PDF, Load_XML, Paper, Task, Upload_PDF
+
+T = typing.TypeVar("T")
 
 
 def chcksum(buffer: str | bytes | BufferedReader):
@@ -23,7 +30,7 @@ def chcksum(buffer: str | bytes | BufferedReader):
 def check_for_xmls(paper_id: str):
     cached_xmls = {
         path.name.replace(".grobid.tei.xml", ""): path
-        for path in Path("temp/xmls").glob("*.grobid.tei.xml")
+        for path in Path("temp/xmls").glob("**/*.grobid.tei.xml")
     }
 
     if paper_id in cached_xmls:
@@ -74,12 +81,12 @@ def upload_pdfs(
     except Exception as e:
         shutil.rmtree(new_cache_dir)
         raise Exception(
-            f"Exception: {e}\nOccured during uploading PDF {pdf.file.name}. All the PDFs queued for upload will be removed."
+            f"{e}\nOccured during uploading PDF {pdf.file.name}. All the PDFs queued for upload will be removed."
         )
 
 
 def download_pdfs(urls: list[str], new_cache_dir: Path | None = None):
-    with TemporaryDirectory() as tmpdir:
+    with TemporaryDirectory(dir=Path("temp")) as tmpdir:
         try:
             for url in urls:
                 request.urlretrieve(url, f"{tmpdir}/{chcksum(url)}.pdf")
@@ -93,7 +100,9 @@ def download_pdfs(urls: list[str], new_cache_dir: Path | None = None):
             with open(pdf, "rb") as file:
                 f_id = chcksum(file)
             # duplicates are overwritten
-            shutil.move(pdf.with_name(f_id), new_cache_dir)
+            shutil.move(
+                pdf.rename(pdf.with_name(f_id).with_suffix(".pdf")), new_cache_dir
+            )
 
     return py_.chain(new_cache_dir.glob("*.pdf")).map_(
         lambda pdf: Downloaded_PDF(pdf.name.replace(".pdf", ""), pdf)
@@ -101,7 +110,7 @@ def download_pdfs(urls: list[str], new_cache_dir: Path | None = None):
 
 
 def pdfs_to_xmls(pdf_load_dir: Path):
-    new_cache_dir = create_random_dir("temp/xmls/")
+    new_cache_dir = create_random_dir("temp/xmls")
 
     try:
         client = GrobidClient(config_path="./config.json")
@@ -112,13 +121,36 @@ def pdfs_to_xmls(pdf_load_dir: Path):
             consolidate_header=False,
         )
 
-        return py_.chain(Path(new_cache_dir).glob("*.grobid.tei.xml")).map_(
+        return py_.chain(Path(new_cache_dir).glob("**/*.grobid.tei.xml")).map_(
             lambda xml: Load_XML(xml.name.replace(".grobid.tei.xml", ""), xml)
         )
     except Exception as e:
         shutil.rmtree(new_cache_dir)
         shutil.rmtree(pdf_load_dir)
-        raise Exception(f"Exception: {e}\nOccured during conversion of pdfs to xmls.")
+        raise Exception(f"{e}\nOccured during conversion of pdfs to xmls.")
 
 
 upload_convert = py_.flow(upload_pdfs, pdfs_to_xmls)
+
+
+def task_wrapper_extract_entities(task: Task):
+    start = time.perf_counter()
+    task.extracted_ents = extract_entities(
+        verify=task.verify,
+        chunks=task.chunks,
+        temperature=LLM_TEMPERATURE,
+        entity_type=task.task_type,  # type: ignore
+        q_embeds=query_embedder(task.task_type),  # type: ignore
+    )
+    task.time_elapsed = time.perf_counter() - start
+    task.pending = False
+    return task
+
+
+def forker(tasks: list[T], function: typing.Callable[[T], T]):
+    start = time.perf_counter()
+
+    with Pool() as pool:
+        results = pool.map(function, tasks)
+
+    return (results, time.perf_counter() - start)

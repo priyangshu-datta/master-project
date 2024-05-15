@@ -3,11 +3,14 @@ from typing import NamedTuple
 import attrs
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
+from enums import TaskType
+
 
 class Upload_PDF(NamedTuple):
     id: str
     file: UploadedFile
-    
+
+
 class Downloaded_PDF(NamedTuple):
     id: str
     file_path: Path
@@ -20,6 +23,20 @@ class Load_XML(NamedTuple):
 
 @attrs.define(frozen=True)
 class Paper:
-    id: str
-    xml_path: Path
+    id: str = attrs.field(repr=False)
+    xml_path: Path = attrs.field(repr=False)
     title: str
+
+
+@attrs.define(on_setattr=attrs.setters.frozen)
+class Task:
+    id: str = attrs.field(repr=False)
+    paper: Paper
+    task_type: TaskType
+    verify: bool
+    chunks: list[str] = attrs.field(repr=False)
+    time_elapsed: float = attrs.field(on_setattr=attrs.setters.NO_OP, default=None)
+    extracted_ents: set[str] = attrs.field(on_setattr=attrs.setters.NO_OP, factory=set)
+    pending: bool = attrs.field(on_setattr=attrs.setters.NO_OP, default=True)
+
+
