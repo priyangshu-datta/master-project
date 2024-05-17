@@ -245,15 +245,16 @@ def main():
                             else:
                                 annotaions[task.type] = task.extracted_ents
 
-                        st.download_button(
-                            "Download PDF with compiled Annotations",
-                            data=annotate_pdf(
-                                paper.pdf_path,
-                                annotaions,
-                            ),
-                            file_name=f"{py_.title_case(task.paper.title).replace(' ','_')}_all_extracted.pdf",
-                            key=f"{batch.batch_id}",
-                        )
+                        if len(py_.flatten(list(annotaions.values()))) > 1:                            
+                            st.download_button(
+                                "Download PDF with compiled Annotations",
+                                data=annotate_pdf(
+                                    paper.pdf_path,
+                                    annotaions,
+                                ),
+                                file_name=f"{py_.title_case(task.paper.title).replace(' ','_')}_all_extracted.pdf",
+                                key=f"{batch.batch_id}",
+                            )
 
                         for task in batch.results:
                             if task.paper.id != paper.id:
@@ -267,6 +268,17 @@ def main():
                                     st.write("🟢 Verified with Internet.")
                                 else:
                                     st.write("🟡 Not Verified with Internet.")
+                                    
+                                st.write(
+                                    "**Actual Time Taken:** {att:.2f}s".format(
+                                        att=task.time_elapsed
+                                    )
+                                )
+                                
+                                if len(task.extracted_ents) < 1:
+                                    st.write(f"No {task.type}s found.")
+                                    continue
+                                    
                                 st.dataframe(
                                     pd.DataFrame(
                                         list(task.extracted_ents),
@@ -275,11 +287,7 @@ def main():
                                     hide_index=True,
                                     use_container_width=True,
                                 )
-                                st.write(
-                                    "**Actual Time Taken:** {att:.2f}s".format(
-                                        att=task.time_elapsed
-                                    )
-                                )
+                                
 
                                 st.download_button(
                                     "Download PDF with Annotations",
