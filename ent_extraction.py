@@ -242,13 +242,6 @@ def verify_counter():
                 #     time.sleep(0.05)
                 #     continue
 
-                # ic(
-                #     DDGS().text(
-                #         query,
-                #         max_results=5,
-                #     )
-                # )
-
                 docs = (
                     py_.chain(
                         DDGS().text(
@@ -259,7 +252,6 @@ def verify_counter():
                     .map_(lambda x: f"{x['title']}: {x['body']}")
                     .value()
                 )
-                # return (entity, True)
 
                 # last_time = time.time()
 
@@ -352,12 +344,9 @@ def extract_entities(
     )
 
     if verify:
-        # using threads will not be helpful due to RateLimitException
         ic("Verifying")
         with ThreadPoolExecutor() as executor:
-            results = executor.map(
-                verify_entity, temp_entities, repeat(entity_type)
-            )
+            results = executor.map(verify_entity, temp_entities, repeat(entity_type))
 
             temp_entities = (
                 py_.chain(results)
@@ -365,19 +354,6 @@ def extract_entities(
                 .map_(lambda result: result[0])
                 .value()
             )
-
-        # temp_entities = set(
-        #     py_.objects.get(
-        #         py_.objects.invert_by(
-        #             {
-        #                 entity: verify_entity(entity, entity_type)
-        #                 for entity in temp_entities
-        #             }
-        #         ),
-        #         True,
-        #     )
-        #     or []
-        # )
 
     temp_entities = entities.union(temp_entities)
 
