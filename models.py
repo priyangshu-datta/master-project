@@ -39,3 +39,22 @@ class Task:
     time_elapsed: float = attrs.field(on_setattr=attrs.setters.NO_OP, default=None)
     extracted_ents: set[str] = attrs.field(on_setattr=attrs.setters.NO_OP, factory=set)
     pending: bool = attrs.field(on_setattr=attrs.setters.NO_OP, default=True)
+
+
+class TasksBatchDone(NamedTuple):
+    batch_id: str
+    exec_time: float
+    results: list[Task]
+
+
+@attrs.define(frozen=True)
+class Color:
+    r: float
+    g: float
+    b: float
+
+    def invert(self):
+        return Color(1 - self.r, 1 - self.g, 0)
+
+    def get(self):
+        return self.r, self.g, self.b

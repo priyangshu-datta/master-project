@@ -16,7 +16,7 @@ import pandas as pd
 import pydash as py_
 from enums import TaskType
 from icecream import ic
-from models import Load_XML, Paper, Task, Upload_PDF
+from models import Load_XML, Paper, Task, Upload_PDF, TasksBatchDone
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 from utils import (
     chcksum,
@@ -29,6 +29,7 @@ from utils import (
     upload_convert,
 )
 from annotate_pdf import annotate_pdf
+import typing as t
 
 
 def load_pdf_uploads(pdfs: list[UploadedFile]):
@@ -202,50 +203,93 @@ def main():
                 disabled=st.session_state.disable_extract_btn,
             ).query("include==True")
 
-
             for row in edited_task_df.T:
                 ID = uuid.uuid4().hex
 
                 st.session_state.pending_tasks[ID] = Task(
                     paper=paper,
                     id=ID,
-                    type=edited_task_df["task_type"][row].lower(),
-                    verify=edited_task_df["verify"][row],
+                    type=edited_task_df["task_type"][row].lower(),  # type: ignore
+                    verify=edited_task_df["verify"][row],  # type: ignore
                 )
 
         with result_tab:
-            done_tasks: dict[str, Task] = st.session_state.done_tasks
+            result_container = result_tab.container(height=520)
+            with result_container:
 
-            for task in (
-                py_.chain(done_tasks)
-                .filter_(lambda task: task.paper.id == paper.id)
-                .value()
-            ):
-                with result_tab.container(border=True):
-                    st.subheader(
-                        f"{py_.human_case(task.type)} Mention Extraction: {task.id}",
-                        divider=True,
+                done_tasks: list[TasksBatchDone] = st.session_state.done_tasks
+
+                relevant_batch = (
+                    py_.chain(done_tasks)
+                    .filter_(
+                        lambda done_task: paper.id
+                        in [r.paper.id for r in done_task.results]
                     )
-                    st.dataframe(
-                        pd.DataFrame(
-                            list(task.extracted_ents),
-                            columns=[f"Extracted {task.type}s"],
-                        ),
-                        hide_index=True,
-                        use_container_width=True,
-                    )
-                    st.write(
-                        "**Actual Time Taken:** {att:.2f}s".format(
-                            att=task.time_elapsed
+                    .value()
+                )
+
+                for batch in relevant_batch:
+
+                    batch_container = result_container.container(border=True)
+
+                    with batch_container:
+                        st.write(f"Batch Completed in {batch.exec_time}s.")
+
+                        annotaions: t.Dict[TaskType, t.Set[str]] = {}
+
+                        for task in batch.results:
+                            if task.paper.id != paper.id:
+                                continue
+                            if task.type in annotaions:
+                                annotaions[task.type].union(task.extracted_ents)
+                            else:
+                                annotaions[task.type] = task.extracted_ents
+
+                        st.download_button(
+                            "Download PDF with compiled Annotations",
+                            data=annotate_pdf(
+                                paper.pdf_path,
+                                annotaions,
+                            ),
+                            file_name=f"{py_.title_case(task.paper.title).replace(' ','_')}_all_extracted.pdf",
+                            key=f"{batch.batch_id}",
                         )
-                    )
 
-                    st.download_button(
-                        "Download PDF with Annotations",
-                        data=annotate_pdf(task.paper.pdf_path, task.extracted_ents),
-                        file_name=f"{py_.title_case(task.paper.title).replace(' ','_')}_{task.type}_extracted.pdf",
-                        key=task.id,
-                    )
+                        for task in batch.results:
+                            if task.paper.id != paper.id:
+                                continue
+                            with batch_container.container(border=True):
+                                st.subheader(
+                                    f"{py_.human_case(task.type)} Mention Extraction: {task.id}",
+                                    divider=True,
+                                )
+                                if task.verify:
+                                    st.write("🟢 Verified with Internet.")
+                                else:
+                                    st.write("🟡 Not Verified with Internet.")
+                                st.dataframe(
+                                    pd.DataFrame(
+                                        list(task.extracted_ents),
+                                        columns=[f"Extracted {task.type}s"],
+                                    ),
+                                    hide_index=True,
+                                    use_container_width=True,
+                                )
+                                st.write(
+                                    "**Actual Time Taken:** {att:.2f}s".format(
+                                        att=task.time_elapsed
+                                    )
+                                )
+
+                                st.download_button(
+                                    "Download PDF with Annotations",
+                                    data=annotate_pdf(
+                                        task.paper.pdf_path,
+                                        {task.type: task.extracted_ents},
+                                    ),
+                                    file_name=f"{py_.title_case(task.paper.title).replace(' ','_')}_{task.type}_extracted.pdf",
+                                    key=task.id,
+                                )
 
     if len(st.session_state.pending_tasks) > 0:
         entity_type = "Entitie"
@@ -269,10 +313,14 @@ def main():
             [task for task in tasks if task.pending], task_wrapper_extract_entities
         )
 
-        st.session_state.done_tasks = {
-            **st.session_state.done_tasks,
-            **{ut.id: ut for ut in updated_tasks},
-        }
+        st.session_state.done_tasks = [
+            *st.session_state.done_tasks,
+            TasksBatchDone(
+                batch_id=chcksum("-".join([ut.id for ut in updated_tasks])),
+                exec_time=exec_time,
+                results=updated_tasks,
+            ),
+        ]
 
         st.session_state.exec_time = exec_time
         st.rerun()
@@ -283,8 +331,8 @@ if __name__ == "__main__":
 
     Path("temp/pdfs/").mkdir(exist_ok=True, parents=True)
     Path("temp/xmls/").mkdir(exist_ok=True, parents=True)
-    for entity_type in TaskType:
-        Path(f"temp/views/{entity_type}").mkdir(exist_ok=True, parents=True)
+    # for entity_type in TaskType:
+    #     Path(f"temp/views/{entity_type}").mkdir(exist_ok=True, parents=True)
     Path("cache/transformers/model/").mkdir(exist_ok=True, parents=True)
 
     if (
@@ -311,7 +359,7 @@ if __name__ == "__main__":
     st.session_state.pending_tasks = {}
 
     if "done_tasks" not in st.session_state:
-        st.session_state.done_tasks = {}
+        st.session_state.done_tasks = []
 
     if "exec_time" not in st.session_state:
         st.session_state.exec_time = None
