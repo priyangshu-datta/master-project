@@ -101,6 +101,7 @@ def load_pdf_downloads(urls: list[str]):
 
 
 def main():
+    st.title("Entity Extractor from Research Paper")
     upload_method, download_method = st.tabs(["Upload", "URL"])
 
     with upload_method:
@@ -245,7 +246,7 @@ def main():
                             else:
                                 annotaions[task.type] = task.extracted_ents
 
-                        if len(py_.flatten(list(annotaions.values()))) > 1:                            
+                        if len(py_.flatten(list(annotaions.values()))) > 1:
                             st.download_button(
                                 "Download PDF with compiled Annotations",
                                 data=annotate_pdf(
@@ -268,17 +269,17 @@ def main():
                                     st.write("🟢 Verified with Internet.")
                                 else:
                                     st.write("🟡 Not Verified with Internet.")
-                                    
+
                                 st.write(
                                     "**Actual Time Taken:** {att:.2f}s".format(
                                         att=task.time_elapsed
                                     )
                                 )
-                                
+
                                 if len(task.extracted_ents) < 1:
                                     st.write(f"No {task.type}s found.")
                                     continue
-                                    
+
                                 st.dataframe(
                                     pd.DataFrame(
                                         list(task.extracted_ents),
@@ -287,7 +288,6 @@ def main():
                                     hide_index=True,
                                     use_container_width=True,
                                 )
-                                
 
                                 st.download_button(
                                     "Download PDF with Annotations",
