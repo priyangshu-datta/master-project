@@ -318,7 +318,7 @@ def main():
     if st.session_state.disable_extract_btn:
         tasks: list[Task] = list(st.session_state.pending_tasks.values())
         updated_tasks, exec_time = forker(
-            [task for task in tasks if task.pending], task_wrapper_extract_entities
+            tasks, task_wrapper_extract_entities
         )
 
         st.session_state.done_tasks = [
