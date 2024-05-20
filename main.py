@@ -101,8 +101,8 @@ def load_pdf_downloads(urls: list[str]):
 
 
 def main():
-    st.title("Entity Extractor from Research Paper")
-    upload_method, download_method = st.tabs(["Upload", "URL"])
+    st.title("Entity Extractor", help="This app helps to extract entities from scientific articles.")
+    upload_method, download_method = st.tabs(["Upload", "Download"])
 
     with upload_method:
         pdfs = st.file_uploader(
