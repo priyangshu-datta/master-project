@@ -134,6 +134,7 @@ def main():
             use_container_width=True,
             disabled=st.session_state.disable_load_btn
             or st.session_state.disable_extract_btn,
+            num_rows="dynamic"
         ).dropna()
         if len(edited_df) > 0:
             st.button(
