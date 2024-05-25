@@ -1,3 +1,5 @@
+import typing as t
+from io import BufferedReader
 import re
 import time
 
@@ -8,19 +10,27 @@ from icecream import ic
 from sentence_transformers import util
 from torch import Tensor
 
+import loguru as lg
+
 from CONSTANTS import LLM_TEMPERATURE
 from enums import TaskType
 from goauth import generative_service_client
 from texts import embedder, sub_ci
 from concurrent.futures import ThreadPoolExecutor
 from itertools import repeat
+import hashlib
+from bootstrap.chromadb import Chroma
 
-prepare_grounding_passages = lambda docs: glm.GroundingPassages(
-    passages=py_.chain(docs)
-    .map_(lambda doc: glm.Content(parts=[glm.Part(text=doc)]))
-    .map_(lambda passage, index: glm.GroundingPassage(content=passage, id=f"{index}"))
-    .value()
-)
+
+def prepare_grounding_passages(docs: t.List[str]):
+    return glm.GroundingPassages(
+        passages=py_.chain(docs)
+        .map_(lambda doc: glm.Content(parts=[glm.Part(text=doc)]))
+        .map_(
+            lambda passage, index: glm.GroundingPassage(content=passage, id=f"{index}")
+        )
+        .value()
+    )
 
 
 def prepare_corpus(chunks, keywords, regex=True):
@@ -48,16 +58,47 @@ def resolve_hit_documents(corpus, query_hits):
     )
 
 
-prepare_embeddings = lambda texts: embedder.encode(texts, convert_to_tensor=True)
+def chcksum(buffer):
+    if isinstance(buffer, str):
+        buffer = buffer.encode("utf-8")
+    if isinstance(buffer, BufferedReader):
+        buffer = buffer.read()
+    return hashlib.sha256(buffer).hexdigest()
 
 
-prepare_query_content = py_.flow(
-    lambda user_query: glm.Part(text=user_query), lambda part: glm.Content(parts=[part])
-)
+# embed_cache = {}
 
-LLM_query = (
-    lambda entity_type, add_to_query="": {
-        TaskType.DATASET: """Extract all named datasets used or mentioned in the provided passages from a research paper as it is.
+
+# def prepare_embeddings(texts: list[str]):
+#     already_encoded = []
+#     not_encoded = []
+#     for text in texts:
+#         if text in embed_cache:
+#             already_encoded.append(embed_cache[chcksum(text)])
+#         else:
+#             not_encoded.append(text)
+
+#     embeddings = embedder().encode(not_encoded, convert_to_tensor=True)
+#     for i, text in enumerate(texts):
+#         embed_cache[chcksum(text)] = embeddings[i]
+#     return embeddings
+
+
+def prepare_embeddings(texts: t.List[str]):
+    
+    return
+
+
+def prepare_query_content(user_query: str):
+    part = glm.Part(text=user_query)
+    return glm.Content(parts=[part])
+
+
+# Ensure that the extraction process accounts for variations in terminology and identifies datasets based on context and proximity to related terms.
+def LLM_query(entity_type: TaskType, add_to_query: str):
+    return (
+        {
+            TaskType.DATASET: """Extract all named datasets used or mentioned in the provided passages from a research paper as it is.
 Do not change or modify the extracted dataset.
 Please ensure that the output is in csv format and that only datasets with explicit names are included from the passages.
 For clarity, a dataset refers to a collection of organized data points or records that serve a specific purpose.
@@ -67,11 +108,10 @@ Datasets may be explicitly mentioned within the passages, such as "We utilize th
 Additionally, datasets can be constructed from other datasets through aggregation, transformation, or combination processes.
 For instance, "We constructed our dataset by merging data from multiple sources, including <Dataset1> and <Dataset2>."
 In some cases, the word "dataset" may be implicit, and datasets may be referred to by other terms such as "data collection", "data source", or "data repository".
-Ensure that the extraction process accounts for variations in terminology and identifies datasets based on context and proximity to related terms.
-Do not consider datasets having "=" in the name.
+Datasets are NOT methods. Methods are something which is applied. Datasets are used on methods. So, extract datasets and ignore methods.
 Ensure that the extraction process focuses on identifying datasets with specific names and excludes general descriptions of data sources or collections. Datasets are alphanumeric words that may not have any meaning.
 """,
-        TaskType.BASELINE: """Extract all baselines mentioned in the provided passages from a research paper. Please ensure that the output is comma-separated.
+            TaskType.BASELINE: """Extract all baselines mentioned in the provided passages from a research paper. Please ensure that the output is comma-separated.
 For clarity, baselines are established methods or models that serve as benchmarks for comparison when evaluating the performance of new methods, models, or algorithms.
 Baselines may be introduced in sentences involving comparisons with other methods or models. Look for keywords such as "compared to", "compared with", "against" or "versus" in sentences discussing comparison methods.
 Additionally, baselines are often referenced in the context of established methods or models that are well-known within the research domain. Look for phrases such as "standard method", "traditional approach", "well-known model" or "established baseline" in sentences discussing comparison methods.
@@ -80,21 +120,26 @@ Baselines may also be described in sentences that discuss the implementation, pa
 In the results section of research papers, baselines are typically mentioned in sentences that compare the performance of different methods or models. Look for sentences that present comparative results and discuss how the performance of the proposed approach compares to that of baselines.
 If no baselines are found in the provided passages, please return None.
 """,
-    }[entity_type]
-    + add_to_query
-)
+        }[entity_type]
+        + add_to_query
+    )
 
 
-generate_answer = py_.flow(
-    lambda grounded_passages, query_content, temperature: glm.GenerateAnswerRequest(
+def generate_answer(
+    grounding_passages: glm.GroundingPassages,
+    query_content: glm.Content,
+    temperature: float | None,
+):
+    answer_request = glm.GenerateAnswerRequest(
         model="models/aqa",
         contents=[query_content],
-        inline_passages=grounded_passages,
+        inline_passages=grounding_passages,
         temperature=temperature,
         answer_style="EXTRACTIVE",  # or ABSTRACTIVE, EXTRACTIVE, VERBOSE
-    ),
-    generative_service_client.generate_answer,
-)
+    )
+
+    return generative_service_client.generate_answer(answer_request)
+
 
 regex_keywords_phrases = {
     TaskType.DATASET: [
@@ -208,88 +253,74 @@ queries = {
 }
 
 
-def verify_counter():
-    last_time = time.time()
+def ask_llm(docs: t.List[str], query: str, temperature: None | float):
+    grounding_passages = prepare_grounding_passages(docs)
 
-    def verify_entity(entity: str, entity_type: TaskType, temperature=LLM_TEMPERATURE):
+    query_content = prepare_query_content(query)
 
-        nonlocal last_time
+    return generate_answer(grounding_passages, query_content, temperature)
 
-        sleep_interval = 1
 
-        match entity_type:
-            case TaskType.DATASET:
-                query = re.sub(
-                    "data ?set|corpus|treebank|database|( ){2,}", r"\1", entity
-                )
-                query = f"{query} +dataset"
-            case TaskType.BASELINE:
-                query = re.sub("baseline|( ){2,}", r"\1", entity)
-                query = f"{query} +baseline"
-            case _:
-                raise Exception("Entity Type: " + entity_type + " not supported.")
-
-        query = (
-            py_.chain(query.split(" "))
-            .filter_(lambda tok: len(tok) > 2)
-            .apply(lambda x: py_.join(x, " "))
-            .value()
-        )
-
-        while True:
-            try:
-                # while time.time() - last_time < 0.07:
-                #     time.sleep(0.05)
-                #     continue
-
-                docs = (
-                    py_.chain(
-                        DDGS().text(
-                            query,
-                            max_results=5,
-                        )
-                    )
-                    .map_(lambda x: f"{x['title']}: {x['body']}")
-                    .value()
-                )
-
-                # last_time = time.time()
-
-                if len(docs) < 1:
-                    return (entity, False)
-                break
-            except exceptions.RatelimitException as e:
-                ic("Error: DDGS rate limit exception!", e)
-                time.sleep(sleep_interval)
-                sleep_interval *= 1.2
-                continue
-            except:
-                return (entity, False)
-        grounding_passages = prepare_grounding_passages(docs)
-
-        query_content = prepare_query_content(f"Is {entity} a data set? (y/n)")
-
-        response = generate_answer(grounding_passages, query_content, temperature)
-        attempted_answer = py_.attempt(
-            lambda _: response.answer.content.parts[0].text, None
-        )
-
-        assert isinstance(attempted_answer, str)
-
+def search_ddg(query: str):
+    docs = []
+    sleep_interval = 1
+    while True:
         try:
-            return (
-                entity,
-                False if attempted_answer == None else "y" in attempted_answer.lower(),
+            search_results: t.List[dict[t.Literal["title", "body"], str]] = DDGS().text(
+                query, max_results=5, backend="lite"
+            )
+            docs = (
+                py_.chain(search_results)
+                .map_(lambda x: f"{x['title']}: {x['body']}")
+                .value()
             )
 
+            break
+        except exceptions.RatelimitException as e:
+            lg.logger.error("Error: DDGS rate limit exception!", e)
+            time.sleep(sleep_interval)
+            sleep_interval *= 1.2
+            if sleep_interval > 60:
+                break
+            continue
         except:
-            # ic(attempted_answer)
-            return entity, False
+            break
 
-    return verify_entity
+    return docs
 
 
-verify_entity = verify_counter()
+def verify_entity(
+    entity: str, entity_type: TaskType, temperature=LLM_TEMPERATURE
+) -> t.Tuple[str, t.List[str]]:
+    match entity_type:
+        case TaskType.DATASET:
+            query = re.sub("data ?set|corpus|treebank|database|( ){2,}", r"\1", entity)
+            query = f"{query} +dataset"
+        case TaskType.BASELINE:
+            query = re.sub("baseline|( ){2,}", r"\1", entity)
+            query = f"{query} +baseline"
+        case _:
+            raise Exception("Entity Type: " + entity_type + " not supported.")
+
+    query = (
+        py_.chain(query.split(" ")).filter_(lambda tok: len(tok) > 2).join(" ").value()
+    )
+
+    docs = search_ddg(query)
+
+    response = ask_llm(docs, f"Is {entity} a data set? (y/n)", temperature)
+    attempted_answer = py_.attempt(
+        lambda _: response.answer.content.parts[0].text, None
+    )
+
+    assert isinstance(attempted_answer, str)
+
+    if "y" in attempted_answer.lower():
+        return entity, [
+            ga.content.parts[0].text for ga in response.answer.grounding_attributions
+        ]
+    else:
+        return entity, []
 
 
 def extract_entities(
@@ -303,49 +334,49 @@ def extract_entities(
 ):
     keywords = keywords or set(regex_keywords_phrases[entity_type])
     corpus = prepare_corpus(chunks, keywords=keywords, regex=len(entities) < 1)
-    corpus_embeds = prepare_embeddings(corpus)
+    c_embeds = prepare_embeddings(corpus)
+    doc_hits = util.semantic_search(q_embeds, c_embeds, top_k=20)  # type: ignore
+    docs = resolve_hit_documents(corpus, doc_hits)
 
-    queries_hits = util.semantic_search(q_embeds, corpus_embeds, top_k=20)  # type: ignore
-    docs = resolve_hit_documents(corpus, queries_hits)
-    grounding_passages = prepare_grounding_passages(docs)
-
-    query_content = py_.flow(LLM_query, prepare_query_content)(
-        entity_type,
-        (
-            "Example {} found are: {}.".format(
-                entity_type.lower() + "s", ", ".join(entities)
-            )
-            if len(entities) > 0
-            else ""
+    response = ask_llm(
+        docs,
+        LLM_query(
+            entity_type,
+            (
+                f"Example {entity_type.lower() + 's'} are: {', '.join(entities)}. Find more {entity_type.lower() + 's'}."
+                if len(entities) > 0
+                else ""
+            ),
         ),
+        temperature,
     )
 
-    ic("Asking LLM")
-    response = generate_answer(grounding_passages, query_content, temperature)
     attempted_answer = py_.attempt(
         lambda _: response.answer.content.parts[0].text, None
     )
 
-    if py_.is_error(attempted_answer):
-        print(attempted_answer)
-        return
+    assert isinstance(attempted_answer, str), print(attempted_answer)
 
-    for text_in_brackets in re.findall(pattern=r"\((.*?)\)", string=attempted_answer):  # type: ignore
-        if not re.search(r"\( *(?:[\w& \.,*-]+\d{4};?)+ *\)", text_in_brackets):
+    intext_citation_regex_1 = re.compile(r"\( *(?:[\w& \.,*-]+\d{4};?)+ *\)")
+    intext_citation_regex_2 = re.compile(r" \w+ et\.? al\.")
+    inside_bracket_regex = re.compile(r"\((.*?)\)")
+    text_in_brackets = re.findall(pattern=inside_bracket_regex, string=attempted_answer)
+
+    for text in text_in_brackets:
+        if not re.search(intext_citation_regex_1, text):
             continue
-        attempted_answer = re.sub(rf"\({text_in_brackets}\)", "", attempted_answer)  # type: ignore
+        attempted_answer = re.sub(rf"\({text}\)", "", attempted_answer)
 
-    attempted_answer = sub_ci(r" \w+ et\.? al\.", "")(attempted_answer)
+    attempted_answer = sub_ci(intext_citation_regex_2, "")(attempted_answer)
     temp_entities = (
         py_.chain(attempted_answer.split(", "))
-        .map_(lambda x: x.strip())
-        .filter_(lambda x: len(x.split(" ")) < 10 and "et al." not in x)
+        .map_(py_.trim)
+        .filter_(lambda x: len(x.split(" ")) < 10 and "et al." not in x.lower())
         .value()
     )
 
     if verify:
-        ic("Verifying")
-        with ThreadPoolExecutor() as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             results = executor.map(verify_entity, temp_entities, repeat(entity_type))
 
             temp_entities = (
@@ -358,20 +389,20 @@ def extract_entities(
     temp_entities = entities.union(temp_entities)
 
     if temp_entities - entities == set():
+        lg.logger.info(f"Returning {entity_type}(s).")
         return entities
 
-    entities = temp_entities
+    entities = entity_keywords = temp_entities
 
-    entity_keywords = entities
-
-    for dataset in entities:
-        if m := re.findall(r"\((.*?)\)", dataset):
-            m = [_.strip() for _ in m]
-            entity_keywords = entity_keywords.union(m)
+    for entity in entities:
+        if match := re.findall(inside_bracket_regex, entity):
+            match = [m.strip() for m in match]
+            entity_keywords = entity_keywords.union(match)
             entity_keywords = entity_keywords.union(
-                {re.sub(rf"\({_}\)", "", dataset).strip() for _ in m}
+                {re.sub(rf"\({m}\)", "", entity).strip() for m in match}
             )
-    ic("Recurring")
+
+    lg.logger.info("Iterative Prompting")
     return extract_entities(
         chunks, q_embeds, entity_type, entity_keywords, entities, verify
     )

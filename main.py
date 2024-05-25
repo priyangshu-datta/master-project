@@ -11,7 +11,6 @@ st.set_page_config(
 
 import time
 from pathlib import Path
-import uuid
 import pandas as pd
 import pydash as py_
 from enums import TaskType
@@ -30,6 +29,8 @@ from utils import (
 )
 from annotate_pdf import annotate_pdf
 import typing as t
+from texts import xml_to_body_text, create_sub_papers, clean_text
+import loguru as lg
 
 
 def load_pdf_uploads(pdfs: list[UploadedFile]):
@@ -101,47 +102,56 @@ def load_pdf_downloads(urls: list[str]):
 
 
 def main():
-    st.title("Entity Extractor from Research Paper")
-    upload_method, download_method = st.tabs(["Upload", "URL"])
+    st.title("Entity Extractor", help="Extract entities from scientific articles")
+
+    upload_method, download_method = st.columns(2)
+
+    # upload_method, download_method = st.tabs(["Upload", "Download"])
 
     with upload_method:
-        pdfs = st.file_uploader(
-            "Upload research papers",
-            accept_multiple_files=True,
-            type="pdf",
-            disabled=st.session_state.disable_load_btn
-            or st.session_state.disable_extract_btn,
-        )
-        if pdfs != None and len(pdfs) > 0:
-            st.button(
-                f"Upload PDF{'s' if len(pdfs) > 1 else ''}",
-                key="upload_btn",
+        with st.container(border=True):
+            st.info("Upload Research Papers")
+            pdfs = st.file_uploader(
+                "Upload research papers",
+                accept_multiple_files=True,
+                type="pdf",
                 disabled=st.session_state.disable_load_btn
                 or st.session_state.disable_extract_btn,
+                label_visibility="collapsed",
             )
+            if pdfs != None and len(pdfs) > 0:
+                st.button(
+                    f"Upload PDF{'s' if len(pdfs) > 1 else ''}",
+                    key="upload_btn",
+                    disabled=st.session_state.disable_load_btn
+                    or st.session_state.disable_extract_btn,
+                )
 
     with download_method:
-        edited_df = st.data_editor(
-            pd.DataFrame([{"url": None}]),
-            column_config={
-                "url": st.column_config.LinkColumn(
-                    label="URL",
-                    width="large",
-                    validate=r"^https:\/\/.+$",
-                    display_text=r"^https:\/\/.+?\/([^\/]+?)$",
-                )
-            },
-            use_container_width=True,
-            disabled=st.session_state.disable_load_btn
-            or st.session_state.disable_extract_btn,
-        ).dropna()
-        if len(edited_df) > 0:
-            st.button(
-                f"Download PDF{'s' if len(edited_df) > 1 else ''}",
-                key="download_btn",
+        with st.container(border=True):
+            st.info("Download Research Papers")
+            edited_df = st.data_editor(
+                pd.DataFrame([{"url": None}]),
+                column_config={
+                    "url": st.column_config.LinkColumn(
+                        label="URL",
+                        width="medium",
+                        validate=r"^https:\/\/.+$",
+                        display_text=r"^https:\/\/.+?\/([^\/]+?)$",
+                    )
+                },
+                use_container_width=True,
                 disabled=st.session_state.disable_load_btn
                 or st.session_state.disable_extract_btn,
-            )
+                num_rows="dynamic"
+            ).dropna()
+            if len(edited_df) > 0:
+                st.button(
+                    f"Download PDF{'s' if len(edited_df) > 1 else ''}",
+                    key="download_btn",
+                    disabled=st.session_state.disable_load_btn
+                    or st.session_state.disable_extract_btn,
+                )
 
     if st.session_state.disable_load_btn:
         if pdfs != None and len(pdfs) > 0 and st.session_state.upload_btn:
@@ -205,13 +215,14 @@ def main():
             ).query("include==True")
 
             for row in edited_task_df.T:
-                ID = uuid.uuid4().hex
+                ID = chcksum(f"{paper.id}-{edited_task_df["task_type"][row].lower()}") # type: ignore
 
                 st.session_state.pending_tasks[ID] = Task(
                     paper=paper,
                     id=ID,
                     type=edited_task_df["task_type"][row].lower(),  # type: ignore
                     verify=edited_task_df["verify"][row],  # type: ignore
+                    text=xml_to_body_text(paper.xml_path),
                 )
 
         with result_tab:
@@ -254,7 +265,7 @@ def main():
                                     annotaions,
                                 ),
                                 file_name=f"{py_.title_case(task.paper.title).replace(' ','_')}_all_extracted.pdf",
-                                key=f"{batch.batch_id}",
+                                key=f"{batch.batch_id}-{paper.id}",
                             )
 
                         for task in batch.results:
@@ -316,17 +327,66 @@ def main():
         )
 
     if st.session_state.disable_extract_btn:
-        tasks: list[Task] = list(st.session_state.pending_tasks.values())
-        updated_tasks, exec_time = forker(
-            [task for task in tasks if task.pending], task_wrapper_extract_entities
-        )
+        tasks: t.List[Task] = list(st.session_state.pending_tasks.values())
+
+
+        modified_tasks: t.List[Task] = []
+        for task in tasks:
+            text = xml_to_body_text(task.paper.xml_path)
+            sub_papers = create_sub_papers(text)
+
+            if len(sub_papers) < 2:
+                modified_tasks.append(task)
+                continue
+
+            for sub_task_i, sub_paper in enumerate(sub_papers):
+                text_span = (
+                    clean_text(text).find(sub_paper),
+                    clean_text(text).find(sub_paper) + len(sub_paper),
+                )
+                sub_task = Task(
+                    id=chcksum(f"{task.paper.id}-{task.type}-{sub_task_i}"),
+                    paper=task.paper,
+                    type=task.type,
+                    verify=task.verify,
+                    text=clean_text(text)[text_span[0] : text_span[1]],
+                    parent_task_id=task.id,
+                )
+                modified_tasks.append(sub_task)
+
+        updated_tasks, exec_time = forker(modified_tasks, task_wrapper_extract_entities)
+        
+        lg.logger.info(updated_tasks)
+
+        done__tasks: t.Dict[str, Task] = {}
+        for ut in updated_tasks:
+            p_id = ut.parent_task_id
+            if p_id == None:
+                done__tasks[ut.id] = ut
+            else:
+                if p_id in done__tasks:
+                    done__tasks[p_id].extracted_ents.union(ut.extracted_ents)
+                    done__tasks[p_id].time_elapsed = max(
+                        ut.time_elapsed, done__tasks[p_id].time_elapsed
+                    )
+                else:
+                    done__tasks[p_id] = Task(
+                        p_id,
+                        ut.paper,
+                        ut.type,
+                        ut.verify,
+                        time_elapsed=ut.time_elapsed,
+                        extracted_ents=ut.extracted_ents,
+                        pending=False,
+                        text="",
+                    )
 
         st.session_state.done_tasks = [
             *st.session_state.done_tasks,
             TasksBatchDone(
-                batch_id=chcksum("-".join([ut.id for ut in updated_tasks])),
+                batch_id=chcksum("-".join([ut.id for ut in done__tasks.values()])),
                 exec_time=exec_time,
-                results=updated_tasks,
+                results=list(done__tasks.values()),
             ),
         ]
 

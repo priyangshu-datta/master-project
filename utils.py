@@ -3,7 +3,7 @@ import shutil
 import time
 import typing
 from io import BufferedReader
-from multiprocessing import Pool
+import multiprocessing as mp
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib import request
@@ -18,11 +18,16 @@ from models import Downloaded_PDF, Load_XML, Paper, Task, Upload_PDF
 from icecream import ic
 from texts import chunker, xml_to_body_text
 from pathlib import Path
+import os
+import loguru as lg
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+import functools
 
 T = typing.TypeVar("T")
 
 
-@st.cache_data(persist="disk")
+# @st.cache_data(persist="disk")
+@functools.lru_cache
 def query_embedder(task_type: TaskType):
     return prepare_embeddings(queries[task_type])
 
@@ -150,12 +155,14 @@ upload_convert = py_.flow(upload_pdfs, pdfs_to_xmls)
 
 def task_wrapper_extract_entities(task: Task):
     start = time.perf_counter()
+    q_embeds = query_embedder(task.type)
+    lg.logger.debug(f"Query embeddings calculated! {time.perf_counter() - start}s")
     task.extracted_ents = extract_entities(
         verify=task.verify,
-        chunks=chunker(xml_to_body_text(task.paper.xml_path)),
+        chunks=chunker(task.text),
         temperature=LLM_TEMPERATURE,
         entity_type=task.type,  # type: ignore
-        q_embeds=query_embedder(task.type),  # type: ignore
+        q_embeds=q_embeds,  # type: ignore
     )
     task.time_elapsed = time.perf_counter() - start
     task.pending = False
@@ -166,7 +173,22 @@ def task_wrapper_extract_entities(task: Task):
 def forker(tasks: list[T], function: typing.Callable[[T], T]):
     start = time.perf_counter()
 
-    with Pool() as pool:
-        results = pool.map(function, tasks)
+    done__tasks = []
 
-    return (results, time.perf_counter() - start)
+    with mp.Pool(processes=5) as e:
+        start = time.perf_counter()
+        results = e.map(function, tasks, chunksize=len(tasks) // 5 if len(tasks) > 5 else 1)
+        lg.logger.debug(f"Mapped processes! {time.perf_counter() - start}s")
+        for result in results:
+            done__tasks.append(result)
+
+        # e.shutdown()
+    # with multiprocessing.Pool(processes=4) as pool:
+    #     results = pool.imap_unordered(function, tasks, 3)
+
+    #     pool.close()
+    #     pool.join()
+
+    lg.logger.info("Done!")
+
+    return (done__tasks, time.perf_counter() - start)

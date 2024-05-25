@@ -36,6 +36,8 @@ class Task:
     paper: Paper
     type: TaskType
     verify: bool
+    text: str = attrs.field(repr=False)
+    parent_task_id: str | None = attrs.field(repr=True, default=None)
     time_elapsed: float = attrs.field(on_setattr=attrs.setters.NO_OP, default=None)
     extracted_ents: set[str] = attrs.field(on_setattr=attrs.setters.NO_OP, factory=set)
     pending: bool = attrs.field(on_setattr=attrs.setters.NO_OP, default=True)

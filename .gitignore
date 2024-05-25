@@ -11,3 +11,4 @@ logs
 venv
 scratch.*
 cache
+*.log*

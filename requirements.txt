@@ -15,3 +15,4 @@ grobid-client-python
 streamlit-pdf-viewer
 pymupdf
 extra_streamlit_components
+chromadb
