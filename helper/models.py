@@ -4,7 +4,7 @@ from typing import NamedTuple
 import attrs
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
-from enums import TaskType
+from helper.enums import TaskType
 
 
 class Upload_PDF(NamedTuple):

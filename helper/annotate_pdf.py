@@ -1,11 +1,8 @@
 # import fitz
 import pymupdf as pypdf
-import random
-from pathlib import Path
-from icecream import ic
-from enums import TaskType
-import typing as t
-from models import Color
+
+from helper.models import Color
+from settings import *
 
 
 def annotate_pdf(pdf_path: Path, entities: t.Dict[TaskType, t.Set[str]]):
@@ -14,7 +11,7 @@ def annotate_pdf(pdf_path: Path, entities: t.Dict[TaskType, t.Set[str]]):
     colors = {
         ent_type: {
             ent: Color(
-                random.random(), random.random(), 0
+                rand.random(), rand.random(), 0
             )  # research papers are filled with blues already
             for ent in ents
         }

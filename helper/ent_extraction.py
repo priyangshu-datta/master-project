@@ -1,25 +1,17 @@
-import typing as t
+from concurrent.futures import ThreadPoolExecutor
 from io import BufferedReader
-import re
-import time
+from itertools import repeat
 
 import google.ai.generativelanguage as glm
-import pydash as py_
+import numpy as np
 from duckduckgo_search import DDGS, exceptions
-from icecream import ic
 from sentence_transformers import util
 from torch import Tensor
 
-import loguru as lg
-
-from CONSTANTS import LLM_TEMPERATURE
-from enums import TaskType
-from goauth import generative_service_client
-from texts import embedder, sub_ci
-from concurrent.futures import ThreadPoolExecutor
-from itertools import repeat
-import hashlib
-from bootstrap.chromadb import Chroma
+from bootstrap.chromadb import ChromaPersist
+from helper.goauth import generative_service_client
+from settings import *
+from helper.texts import sub_ci
 
 
 def prepare_grounding_passages(docs: t.List[str]):
@@ -33,7 +25,7 @@ def prepare_grounding_passages(docs: t.List[str]):
     )
 
 
-def prepare_corpus(chunks, keywords, regex=True):
+def prepare_corpus(chunks: list[str], keywords, regex=True):
     isKeywordInChunk = lambda chunk, keyword: re.search(
         keyword if regex else re.escape(keyword), chunk, re.IGNORECASE
     )
@@ -43,19 +35,16 @@ def prepare_corpus(chunks, keywords, regex=True):
     return py_.chain(chunks).filter_(isChunkUseful).value()
 
 
-def resolve_hit_documents(corpus, query_hits):
-    indices_filtered_corpus = (
-        py_.chain(query_hits)
-        .flatten()
-        .map_(lambda hit: hit["corpus_id"])
-        .map_(int)
-        .value()
+def resolve_hit_documents(corpus: list[str], query_hits: list):
+    indices = py_.uniq_with(
+        sorted(
+            py_.chain(query_hits).flatten().value(),
+            key=lambda passage: passage["score"],
+            reverse=True,
+        ),
+        lambda a, b: a["corpus_id"] == b["corpus_id"],
     )
-    return (
-        py_.chain(corpus)
-        .filter_(lambda _, index: index in indices_filtered_corpus)
-        .value()
-    )
+    return list(map(lambda x: corpus[x["corpus_id"]], indices))
 
 
 def chcksum(buffer):
@@ -66,27 +55,21 @@ def chcksum(buffer):
     return hashlib.sha256(buffer).hexdigest()
 
 
-# embed_cache = {}
-
-
-# def prepare_embeddings(texts: list[str]):
-#     already_encoded = []
-#     not_encoded = []
-#     for text in texts:
-#         if text in embed_cache:
-#             already_encoded.append(embed_cache[chcksum(text)])
-#         else:
-#             not_encoded.append(text)
-
-#     embeddings = embedder().encode(not_encoded, convert_to_tensor=True)
-#     for i, text in enumerate(texts):
-#         embed_cache[chcksum(text)] = embeddings[i]
-#     return embeddings
+collection = ChromaPersist.init(name="embeddings", path=Path("./cache/db"))
 
 
 def prepare_embeddings(texts: t.List[str]):
-    
-    return
+    IDS = {chcksum(text): text for text in texts}
+    in_DB = collection.get(ids=list(IDS.keys())).get("ids")
+    out_DB = list(set(IDS) - set(in_DB))
+    if len(out_DB) > 0:
+        collection.add(ids=out_DB, documents=[IDS[_id] for _id in IDS if _id in out_DB])
+
+    embeddings = collection.get(ids=list(IDS.keys()), include=["embeddings"]).get(
+        "embeddings"
+    )
+
+    return embeddings
 
 
 def prepare_query_content(user_query: str):
@@ -138,7 +121,7 @@ def generate_answer(
         answer_style="EXTRACTIVE",  # or ABSTRACTIVE, EXTRACTIVE, VERBOSE
     )
 
-    return generative_service_client.generate_answer(answer_request)
+    return generative_service_client().generate_answer(answer_request)
 
 
 regex_keywords_phrases = {
@@ -213,25 +196,19 @@ regex_keywords_phrases = {
 queries = {
     TaskType.DATASET: [
         "Data used in the study",
-        "Datasets employed for analysis",
-        "Data sources referenced",
         "Dataset utilized for research",
         "Data collection methods",
         "Datasets examined in the paper",
-        "Data analysis conducted",
         "Datasets referenced in the research",
         "Data sources investigated",
         "Dataset mentioned in the study",
         "Data utilized for analysis",
-        "Datasets considered in the research",
         "Data collection procedures",
         "Dataset discussed in the paper",
         "Data sources utilized",
-        "Datasets referenced for analysis",
-        "Data used for research purposes",
-        "Dataset examined in the study",
         "Data sources referenced in the paper",
         "Datasets employed for investigation",
+        "Datasets used as benchmarks",
     ],
     TaskType.BASELINE: [
         "Compare against baselines",
@@ -253,12 +230,18 @@ queries = {
 }
 
 
-def ask_llm(docs: t.List[str], query: str, temperature: None | float):
+def ask_llm(
+    docs: t.List[str],
+    query: str,
+    temperature: None | float,
+):
+
     grounding_passages = prepare_grounding_passages(docs)
 
     query_content = prepare_query_content(query)
 
-    return generate_answer(grounding_passages, query_content, temperature)
+    response = generate_answer(grounding_passages, query_content, temperature)
+    return response
 
 
 def search_ddg(query: str):
@@ -277,7 +260,7 @@ def search_ddg(query: str):
 
             break
         except exceptions.RatelimitException as e:
-            lg.logger.error("Error: DDGS rate limit exception!", e)
+            lg.error("Error: DDGS rate limit exception!", e)
             time.sleep(sleep_interval)
             sleep_interval *= 1.2
             if sleep_interval > 60:
@@ -324,42 +307,81 @@ def verify_entity(
 
 
 def extract_entities(
-    chunks: list[str],
+    sentences: list[str],
     q_embeds: list[Tensor] | Tensor,
     entity_type: TaskType,
     keywords: set[str] | None = None,
     entities: set[str] = set(),
     verify=True,
+    verify_lock=None,
     temperature: float | None = LLM_TEMPERATURE,
 ):
     keywords = keywords or set(regex_keywords_phrases[entity_type])
-    corpus = prepare_corpus(chunks, keywords=keywords, regex=len(entities) < 1)
-    c_embeds = prepare_embeddings(corpus)
-    doc_hits = util.semantic_search(q_embeds, c_embeds, top_k=20)  # type: ignore
-    docs = resolve_hit_documents(corpus, doc_hits)
 
-    response = ask_llm(
-        docs,
-        LLM_query(
-            entity_type,
-            (
-                f"Example {entity_type.lower() + 's'} are: {', '.join(entities)}. Find more {entity_type.lower() + 's'}."
-                if len(entities) > 0
-                else ""
-            ),
+    key_passages = prepare_corpus(
+        sentences,
+        regex_keywords_phrases[entity_type],
+        regex=True,
+    )
+
+    c_embeds = np.array(prepare_embeddings(key_passages))
+
+    doc_hits = util.semantic_search(q_embeds, c_embeds)  # type: ignore
+
+    docs = resolve_hit_documents(key_passages, doc_hits)
+
+    [sentences.index(doc) for doc in docs]
+    passages: list[str] = []
+    for doc in docs:
+        j = sentences.index(doc)
+        passage = ""
+        i = 0
+        while len(passage.split(" ")) < 200:
+            passage = " ".join(
+                sentences[max(0, j - i) : min(len(sentences), j + i + 1)]
+            )
+            i += 1
+
+        passages.append(passage)
+
+    query = LLM_query(
+        entity_type,
+        (
+            f"Example {entity_type.lower() + 's'} are: {', '.join(entities)}. Find more {entity_type.lower() + 's'}."
+            if len(entities) > 0
+            else ""
         ),
-        temperature,
     )
 
-    attempted_answer = py_.attempt(
-        lambda _: response.answer.content.parts[0].text, None
-    )
+    # response = ask_llm(
+    #     docs,
+    #     query,
+    #     temperature,
+    # )
+    # attempted_answer = py_.attempt(
+    #     lambda _: response.answer.content.parts[0].text, None
+    # )
+
+    llm_answer = []
+
+    for _docs in py_.chunk(passages, 10):
+        response = ask_llm(
+            list(_docs),
+            query,
+            temperature,
+        )
+        attempted_answer = py_.attempt(
+            lambda _: response.answer.content.parts[0].text, None
+        )
+        llm_answer.append(attempted_answer)
+
+    attempted_answer = ", ".join(llm_answer)
 
     assert isinstance(attempted_answer, str), print(attempted_answer)
 
-    intext_citation_regex_1 = re.compile(r"\( *(?:[\w& \.,*-]+\d{4};?)+ *\)")
-    intext_citation_regex_2 = re.compile(r" \w+ et\.? al\.")
-    inside_bracket_regex = re.compile(r"\((.*?)\)")
+    intext_citation_regex_1 = r"\( *(?:[\w& \.,*-]+\d{4};?)+ *\)"
+    intext_citation_regex_2 = r" \w+ et\.? al\."
+    inside_bracket_regex = r"\((.*?)\)"
     text_in_brackets = re.findall(pattern=inside_bracket_regex, string=attempted_answer)
 
     for text in text_in_brackets:
@@ -368,28 +390,31 @@ def extract_entities(
         attempted_answer = re.sub(rf"\({text}\)", "", attempted_answer)
 
     attempted_answer = sub_ci(intext_citation_regex_2, "")(attempted_answer)
-    temp_entities = (
-        py_.chain(attempted_answer.split(", "))
-        .map_(py_.trim)
-        .filter_(lambda x: len(x.split(" ")) < 10 and "et al." not in x.lower())
-        .value()
+    temp_entities = list(
+        filter(
+            lambda x: len(x.split(" ")) < 10 and "et al." not in x.lower(),
+            map(py_.trim, attempted_answer.split(", ")),
+        )
     )
 
-    if verify:
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            results = executor.map(verify_entity, temp_entities, repeat(entity_type))
+    if verify and verify_lock:
+        with verify_lock:
+            with ThreadPoolExecutor() as executor:
+                results = executor.map(
+                    verify_entity, temp_entities, repeat(entity_type)
+                )
 
-            temp_entities = (
-                py_.chain(results)
-                .filter_(lambda result: result[1])
-                .map_(lambda result: result[0])
-                .value()
-            )
+                temp_entities = (
+                    py_.chain(results)
+                    .filter_(lambda result: result[1])
+                    .map_(lambda result: result[0])
+                    .value()
+                )
 
     temp_entities = entities.union(temp_entities)
 
     if temp_entities - entities == set():
-        lg.logger.info(f"Returning {entity_type}(s).")
+        # lg.logger.info(f"Returning {entity_type}(s).")
         return entities
 
     entities = entity_keywords = temp_entities
@@ -402,7 +427,7 @@ def extract_entities(
                 {re.sub(rf"\({m}\)", "", entity).strip() for m in match}
             )
 
-    lg.logger.info("Iterative Prompting")
+    # lg.logger.info("Iterative Prompting")
     return extract_entities(
-        chunks, q_embeds, entity_type, entity_keywords, entities, verify
+        sentences, q_embeds, entity_type, entity_keywords, entities, verify, verify_lock
     )

@@ -1,10 +1,7 @@
-import pydash as py_
-import re
 from bs4 import BeautifulSoup as bs4
 from sentence_transformers import SentenceTransformer
-from CONSTANTS import SENTENCES_PER_PAPER
-from pathlib import Path
-from icecream import ic
+
+from settings import *
 
 
 def group_sentences(sentences: list[str], max_tokens=100, overlap=1):
@@ -66,7 +63,7 @@ sub_cs = lambda x, y: py_.partial(re.sub, x, y)
 emoticons = r"\(>\.>\)|\(\^\.\^ゞ\)|\(\^_\^\)Y|:\-\)|;\-@|;\-\^|\(>\.<\)\(\^\.\^\)|\(\^_\-\)/\~\~|:\^|;\(|\(\^_\^\)/|\(ToT\)|:\-\^|\(\^\^ゞ|:\-=|:\-\#|;\-\[|\(>_>\)|:\-D|\(>\.<\)|\(\^o\^\)丿|:\-\.|:P|\(\^_\^\)\-☆|\(\^_\^\)w|;\\|:\-o|;\-C|;\-S|\(\^_\^\)v|:\-C|\(>\.<\)b|\(\*_\*\)|\(\-_\-;\)|;P|;=|\(\^_\-\)b|\(\^o\^\)|:\-P|:\#|\(\*\^\.\^\*\)|>:\[|\(\^_\-\)/\~|:\$|\(\^ω\^\)|:\-\{|:'\-\(|\(\^_\-\)\-☆|\(\-_\-\)|x\-\)|:\-X|:X|\(\*O\*\)|\(\*\^_\^\*\)|\(<_<\)|\(ーー;\)|;\-\#|:\*|;\-P|;\-!|:@|\(\^_\-\)Y|:/|\(\^_\-\)W|:\-0|\(\~_\~\)|;/|:!|;\-D|X\-\)|;\-/|;\-=|\(@_@\)|\(°\~°\)|\(\^_\^メ\)|:'\(|8\-\)|\(°u°\)|;\-\(|:\-\(|:\\|:D|;\-\\|\(>_<\)|\(\^ε\^\)|\(\^_\^\)b|:O|\(\^з\^\)|:\-\&|:=|O:\-\)|\(\^\.\^\)|:\-!|;'\-\)|\('\-'\)|\(\._\.\)|:\-<|;O|\(\^人\^\)|\(\^_\^\)|\(°\-°\)|:'\)|;\-\)|\(\^\-\^\)|;\-\$|\(\^\-\^\)b|\(,_,\)|\(\^_\-\)w|;\-\&|;D|:\-\||\(°_°\)|:S|:\-\\|>:D|;\-\{|\(\^\.\^\)y|\(\^_\-\)d|\(°\.°\)|\(\^_\^\)/\~|:\-\[|:\-/|\(\^_\^\*\)|:\&|;\-<|;'\)|:\)|;\)|;\*|\(\^_\-\)|:\-O|;'\-\(|:\-S|;\-O|:\(|B\-\)|\(\~_\^\)|;@|\(\^\-\^ゝ゛\)|\(\^_\^\)W|;\^|;S|\(°o°\)|\(\^O\^\)|\(\*o\*\)|\(>﹏<\)|;\||;\&|\(\^_\^\)/\~\~|:\||>:\)|\(\^_\-\)/|:\-\*|0:\-\)|;\$|;!|;\-\||;\#|\(\^_\^'\)|:\-\$|:\-@|\(≧∇≦\)|\(T_T\)|\(\*\^0\^\*\)|;\-\*"
 abbr_to_slug_cs = {
     r"([A-Z][a-z]+)\.(?: ?(\d+) ?\.( [A-Z]))": r"\1[dot] \2[dot] \3",  # Fig. 6. The | Fig. 6.ctct
-    r"([A-Z][a-z]+) ?(\d+)\. ?( [A-Z])": r"\1 \2[dot] \3",
+    # r"([A-Z][a-z]+) ?(\d+)\. ?( [A-Z])": r"\1 \2[dot] \3", # Fig 12. Fxdswawef
     r"([A-Z][a-z]+)\.": r"\1[dot]",  # Sentence with one word that starts with captial letter.
 }
 abbr_to_slug_ci = {
@@ -93,12 +90,18 @@ general = [
     r"\( *(?:[a-zA-Z_& \.,*-]+\d{4};?)+ *\)",  # citations (Asic et al., 1234)
     r" ?\[\d+( ?, ?\d+)*\]( ?,? ?\[\d+( ?, ?\d+)*\])*",  # citations [1,2]; [1]
     r"\(\d+\)( ?, ?\(\d+\))*",  # equation numbers (1), (2)
+    r"[αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ]",
 ]
+
+
+def utf_to_ascii(text: str):
+    return text.encode("ascii", "ignore").decode("utf-8")
 
 
 def sentence_splitter(text: str) -> list[str]:
     return py_.flow(
         py_.deburr,
+        utf_to_ascii,
         lambda x: py_.reduce_(
             py_.chain(re.findall(r"\b(?:[a-zA-Z]+\.){1,}[a-zA-Z]\.", x))
             .apply(set)
@@ -160,11 +163,12 @@ def embedder():
     )
 
 
-chunker = (
-    lambda text, max_tokens=200, overlap=2: py_.chain(text)
-    .apply(sentence_splitter)
-    .apply(
-        lambda x: group_sentences(x, max_tokens, overlap),
+def chunker(text: str, max_tokens: int = 200, overlap: int = 2):
+    return (
+        py_.chain(text)
+        .apply(sentence_splitter)
+        .apply(
+            lambda x: group_sentences(x, max_tokens, overlap),
+        )
+        .value()
     )
-    .value()
-)
