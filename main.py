@@ -1,9 +1,9 @@
-from dotenv import load_dotenv
-
-load_dotenv()
-
+from functools import partial
+from threading import Lock
 
 import streamlit as st
+
+from settings import *
 
 st.set_page_config(
     page_title="Entity Mention Extraction", page_icon="⛏️", layout="centered"
@@ -11,26 +11,17 @@ st.set_page_config(
 
 import time
 from pathlib import Path
+
 import pandas as pd
-import pydash as py_
-from enums import TaskType
 from icecream import ic
-from models import Load_XML, Paper, Task, Upload_PDF, TasksBatchDone
 from streamlit.runtime.uploaded_file_manager import UploadedFile
-from utils import (
-    chcksum,
-    check_for_xmls,
-    download_pdfs,
-    forker,
-    load_xml,
-    pdfs_to_xmls,
-    task_wrapper_extract_entities,
-    upload_convert,
-)
-from annotate_pdf import annotate_pdf
-import typing as t
-from texts import xml_to_body_text, create_sub_papers, clean_text
-import loguru as lg
+
+from helper.annotate_pdf import annotate_pdf
+from helper.models import Load_XML, Paper, Task, TasksBatchDone, Upload_PDF
+from helper.texts import clean_text, create_sub_papers, xml_to_body_text
+from helper.utils import (chcksum, check_for_xmls, download_pdfs, load_xml,
+                   pdfs_to_xmls, upload_convert)
+from helper.worker import forker, task_wrapper_extract_entities
 
 
 def load_pdf_uploads(pdfs: list[UploadedFile]):
@@ -72,7 +63,6 @@ def load_pdf_uploads(pdfs: list[UploadedFile]):
 
 
 def load_pdf_downloads(urls: list[str]):
-    ic(urls)
     downloaded_pdfs = download_pdfs(urls).value()
     pdf_cache_dir = None
     for pdf in downloaded_pdfs:
@@ -155,10 +145,8 @@ def main():
 
     if st.session_state.disable_load_btn:
         if pdfs != None and len(pdfs) > 0 and st.session_state.upload_btn:
-            ic("upload")
             load_pdf_uploads(pdfs)
         if len(edited_df["url"]) > 0 and st.session_state.download_btn:
-            ic("download")
             load_pdf_downloads(edited_df["url"].to_list())
         st.rerun()
 
@@ -354,9 +342,9 @@ def main():
                 )
                 modified_tasks.append(sub_task)
 
-        updated_tasks, exec_time = forker(modified_tasks, task_wrapper_extract_entities)
+        updated_tasks, exec_time = forker(modified_tasks, partial(task_wrapper_extract_entities, verify_lock=Lock()))
         
-        lg.logger.info(updated_tasks)
+        lg.info(updated_tasks)
 
         done__tasks: t.Dict[str, Task] = {}
         for ut in updated_tasks:

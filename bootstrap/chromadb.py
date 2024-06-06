@@ -1,8 +1,9 @@
+import multiprocessing as mp
 import os
 from pathlib import Path
-import multiprocessing as mp
 
 import chromadb
+from chromadb.utils import embedding_functions
 
 
 class Chroma:
@@ -18,7 +19,13 @@ class ChromaPersist:
     @staticmethod
     def init(path: Path, name: str):
         chroma_client = chromadb.PersistentClient(path=path.as_posix())
-        collection = chroma_client.get_or_create_collection(name=name)
+        ef = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2", cache_folder="cache/transformers/model/"
+        )
+        collection = chroma_client.get_or_create_collection(
+            name=name,
+            embedding_function=ef,  # type: ignore
+        )
 
         return collection
 
